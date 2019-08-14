@@ -15,7 +15,8 @@ def main(input_data_path):
 
     if MPI is not None:
         mpi_rank = MPI.COMM_WORLD.Get_rank()
-        print('*** Master script called using mpirun ***')
+        if mpi_rank == 0:
+            print('*** Master script called using mpirun ***')
         h5_kwargs.update({'driver': 'mpio', 'comm': MPI.COMM_WORLD})
 
     h5_f = h5py.File(input_data_path, **h5_kwargs)
