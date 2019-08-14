@@ -3,7 +3,7 @@
 ### Start in interactive mode
 #PBS -I
 ### Set the job name. Your output files will share this name.
-#PBS -N debugPyUSID
+#PBS -N debug_sho_fit
 ### Enter your email address. Errors will be emailed to this address.
 #PBS -M somnaths@ornl.gov
 ### Node spec, number of nodes and processors per node that you desire.
