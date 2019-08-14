@@ -1,18 +1,20 @@
 import sys
-sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
-sys.path.append(r'C:\Users\Suhas\PycharmProjects\pycroscopy')
+from enum import Enum
+from warnings import warn
 import numpy as np
-import psutil
-import h5py
-import time as tm
-from utils import *
-from fitter import Fitter
+import joblib
+from functools import partial
+from scipy.optimize import least_squares
 
+sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
 from pyUSID import USIDataset
 from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_spec_dsets, \
                                 create_empty_dataset, get_auxiliary_datasets, write_main_dataset
-from functools import partial
-from scipy.optimize import least_squares
+
+# From this project:
+from utils import *
+from fitter import Fitter
+
 
 '''
 Custom dtype for the datasets created during fitting.
@@ -21,13 +23,15 @@ field_names = ['Amplitude [V]', 'Frequency [Hz]', 'Quality Factor', 'Phase [rad]
 sho32 = np.dtype({'names': field_names,
                   'formats': [np.float32 for name in field_names]})
 
-from enum import Enum
+
 class SHOGuessFunc(Enum):
     complex_gaussian = 0
     wavelet_peaks = 1
-    
+
+
 class SHOFitFunc(Enum):
     least_squares = 0
+
 
 class BESHOfitter(Fitter):
     
@@ -321,9 +325,7 @@ class BESHOfitter(Fitter):
     def _unit_compute_fit(self, *args, **kwargs):
         # At this point data has been read in. Read in the guess as well:
         self._read_guess_chunk()
-        # Call parallel compute manually:
-        import joblib
-        from scipy.optimize import least_squares
+        # Call joblib directly now and then parallel compute manually:
         
         # result = least_squares(sho_error, guess_parms, args=(resp_vec, freq_vec))
         """
