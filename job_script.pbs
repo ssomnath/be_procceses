@@ -36,29 +36,17 @@ module list
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-EGNAME=be_sho
-DATA_PATH=$HOME/BE_SHO_Fitting/data/BELine_0009_just_translation.h5
-SCRIPTS_PATH=$HOME/BE_SHO_Fitting/code
-WORK_PATH=/lustre/or-hydra/cades-ccsd/syz/pycroscopy_ensemble
-
-cd $WORK_PATH
-mkdir $EGNAME
-cd $EGNAME
+cd /lustre/or-hydra/cades-ccsd/syz/pycroscopy_ensemble/be_sho/code
 
 ### Show current directory.
 pwd
 
 ### Copy data:
-DATA_NAME=be_line.h5
-rm -rf $DATA_NAME
-cp $DATA_PATH $DATA_NAME
-
-### Copy python source code:
-cp $SCRIPTS_PATH/*.py .
+cp ../relaxation_original.h5 ./relaxation.h5
 
 # See the contents in Lustre to make sure they are OK
 ls -hl
 
 ### MPI run followed by the name/path of the binary.
-mpiexec -use-hwthread-cpus python master.py $DATA_NAME
+mpiexec -use-hwthread-cpus python master.py relaxation.h5
 ### mpiexec -use-hwthread-cpus python -m cProfile -s cumtime master.py $DATA_NAME
