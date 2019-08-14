@@ -29,15 +29,38 @@ def main(input_data_path):
 
     proc = BESHOfitter(h5_main, verbose=True)
 
+    if mpi_rank == 0:
+        print('*** Instantiated the fitter ***')
+
     proc.set_up_guess()
+
+    if mpi_rank == 0:
+        print('*** Set up the guess ***')
+
+    if MPI is not None:
+        MPI.COMM_WORLD.barrier()
+
     h5_guess = proc.do_guess()
+
+    if mpi_rank == 0:
+        print('*** Guess complete ***')
 
     if mpi_rank == 0:
         print(h5_guess)
         usid.hdf_utils.print_tree(h5_f)
 
     proc.set_up_fit()
+
+    if MPI is not None:
+        MPI.COMM_WORLD.barrier()
+
+    if mpi_rank == 0:
+        print('*** Set up fit ***')
+
     h5_fit = proc.do_fit()
+
+    if mpi_rank == 0:
+        print('*** Fit complete ***')
 
     if mpi_rank == 0:
         print(h5_fit)
