@@ -1,9 +1,10 @@
 import numpy as np
-import h5py
 import sys
-sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
 from warnings import warn
+
+sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
 from pyUSID import USIDataset, Process
+
 
 class Fitter(Process):
     
@@ -27,10 +28,6 @@ class Fitter(Process):
         
         self._is_guess = True
         self.__mode = 0  # 0 for Guess pending, 1 for Fit pending, 2 for fit complete
-        
-    def compute():
-        func_name = 'do_guess()' if self._is_guess else 'do_fit()'
-        warn('Please use ' + func_name + ' instead.')
         
     def _read_guess_chunk(self):
         """
