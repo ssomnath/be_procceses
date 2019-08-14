@@ -97,7 +97,7 @@ class BESHOfitter(Fitter):
         
         self.h5_guess.file.flush()
         
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Finished creating Guess dataset')
         
     def _create_fit_datasets(self):
@@ -129,7 +129,7 @@ class BESHOfitter(Fitter):
 
         self.h5_fit.file.flush()
         
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Finished creating Fit dataset')
         
     def _read_data_chunk(self):
@@ -142,10 +142,10 @@ class BESHOfitter(Fitter):
 
         # At this point the self.data object is the raw data that needs to be reshaped to a single UDVS step:
         if self.data is not None:
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Got raw data of shape {} from super'.format(self.data.shape))
             self.data = reshape_to_one_step(self.data, self.num_udvs_steps)
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Reshaped raw data to shape {}'.format(self.data.shape))
                 
     def _read_guess_chunk(self):
@@ -181,10 +181,10 @@ class BESHOfitter(Fitter):
             self.guess = np.hstack(tuple(self._results))
             # prepare to reshape:
             self.guess = np.transpose(np.atleast_2d(self.guess))
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Prepared guess of shape {} before reshaping'.format(self.guess.shape))
             self.guess = reshape_to_n_steps(self.guess, self.num_udvs_steps)
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Reshaped guess to shape {}'.format(self.guess.shape))
         else:
             self.fit = self._results
@@ -242,7 +242,7 @@ class BESHOfitter(Fitter):
         self._status_dset_name = 'completed_guess_positions'
         self.duplicate_h5_groups, self.partial_h5_groups = self._check_for_duplicates()
         
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
                print('Groups with Guess in:\nCompleted: {}\nPartial:{}'.format(self.duplicate_h5_groups, self.partial_h5_groups))
         
         self._map_function = partial_func
@@ -275,14 +275,14 @@ class BESHOfitter(Fitter):
         # Case 1: Fit already complete or partially complete. This is similar to a partial process. Leave as is
         self._status_dset_name = 'completed_fit_positions'
         self.duplicate_h5_groups, self.partial_h5_groups = self._check_for_duplicates()
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Checking on partial / completed fit datasets')
             print('Completed results groups:\n{}\nPartial results groups:\n{}'.format(self.duplicate_h5_groups,
                                                                                       self.partial_h5_groups))
 
         # Case 2: Fit neither partial / completed. Search for guess. Most popular scenario:
         if len(self.duplicate_h5_groups) == 0 and len(self.partial_h5_groups) == 0:
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('No fit datasets found. Looking for Guess datasets')
             # Change status dataset name back to guess to check for status on guesses:
             self._status_dset_name = 'completed_guess_positions'
@@ -291,7 +291,7 @@ class BESHOfitter(Fitter):
             # Set parms_dict to an empty dict so that we can accept any Guess dataset:
             self.parms_dict = dict()
             guess_complete_h5_grps, guess_partial_h5_grps = self._check_for_duplicates()
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Guess datasets search resulted in:\nCompleted: {}\nPartial:{}'.format(guess_complete_h5_grps, guess_partial_h5_grps))
             # Now put back the original parms_dict:
             self.parms_dict.update(fit_parms)
@@ -300,7 +300,7 @@ class BESHOfitter(Fitter):
             if len(guess_complete_h5_grps) > 0:
                 # Just set the last group as the current results group
                 self.h5_results_grp = guess_complete_h5_grps[-1]
-                if self.verbose:
+                if self.verbose and self.mpi_rank == 0:
                     print('Guess found! Using Guess in:\n{}'.format(self.h5_results_grp))
                 # It will grab the older status default unless we set the status dataset back to fit
                 self._status_dset_name = 'completed_fit_positions'
@@ -314,7 +314,7 @@ class BESHOfitter(Fitter):
                 FileNotFoundError('No Guess found. Please complete guess first')
                 return
             
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Name of status dataset: ' + self._status_dset_name)
             print('Parameters dictionary: {}'.format(self.parms_dict))
             print('Current results dataset: {}'.format(self.h5_results_grp))
@@ -342,7 +342,7 @@ class BESHOfitter(Fitter):
         cores = recommend_cpu_cores(self.data.shape[0], verbose=self.verbose)
         self._results = joblib.Parallel(n_jobs=cores)(values)
         
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Finished computing fits on {} spectras. Results currently of length: {}'.format(self.data.shape[0], len(self._results)))
                   
         # What least_squares returns is an object that needs to be extracted
@@ -366,16 +366,16 @@ class BESHOfitter(Fitter):
             The reformatted array of parameters.
             
         """
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Strategy to use for reformatting results: "{}"'.format(strategy))
         # Create an empty array to store the guess parameters
         sho_vec = np.zeros(shape=(len(results)), dtype=sho32)
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Raw results and compound SHO vector of shape {}'.format(len(results)))
 
         # Extracting and reshaping the remaining parameters for SHO
         if strategy in ['wavelet_peaks', 'relative_maximum', 'absolute_maximum']:
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                   print('Reformatting results from a peak-position-finding algorithm')
             # wavelet_peaks sometimes finds 0, 1, 2, or more peaks. Need to handle that:
             # peak_inds = np.array([pixel[0] for pixel in results])
@@ -388,12 +388,12 @@ class BESHOfitter(Fitter):
                 else:  # more than one peak found
                     dist = np.abs(np.array(pixel) - int(0.5*self.data.shape[1]))
                     peak_inds[pix_ind] = pixel[np.argmin(dist)]  # set to peak closest to center of band
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Peak positions of shape {}'.format(peak_inds.shape))
             # First get the value (from the raw data) at these positions:
             comp_vals = np.array(
                 [self.data[pixel_ind, peak_inds[pixel_ind]] for pixel_ind in np.arange(peak_inds.size)])
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Complex values at peak positions of shape {}'.format(comp_vals.shape))
             sho_vec['Amplitude [V]'] = np.abs(comp_vals)  # Amplitude
             sho_vec['Phase [rad]'] = np.angle(comp_vals)  # Phase in radians
@@ -403,7 +403,7 @@ class BESHOfitter(Fitter):
             sho_vec['R2 Criterion'] = np.array([self.r_square(self.data, self._sho_func, self.freq_vec, sho_parms)
                                                 for sho_parms in sho_vec])
         elif strategy in ['complex_gaussian']:
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Reformatting results from the SHO Guess algorithm')
             for iresult, result in enumerate(results):
                 sho_vec['Amplitude [V]'][iresult] = result[0]
@@ -412,7 +412,7 @@ class BESHOfitter(Fitter):
                 sho_vec['Phase [rad]'][iresult] = result[3]
                 sho_vec['R2 Criterion'][iresult] = result[4]
         elif strategy in ['least_squares']:
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                 print('Reformatting results from a list of least_squares result objects')
             for iresult, result in enumerate(results):
                 sho_vec['Amplitude [V]'][iresult] = result.x[0]
@@ -421,7 +421,7 @@ class BESHOfitter(Fitter):
                 sho_vec['Phase [rad]'][iresult] = result.x[3]
                 sho_vec['R2 Criterion'][iresult] = 1-result.fun
         else:
-            if self.verbose:
+            if self.verbose and self.mpi_rank == 0:
                   print('_reformat_results() will not reformat results since the provided algorithm: {} does not match anything that this function can handle.'.format(strategy))
 
         return sho_vec

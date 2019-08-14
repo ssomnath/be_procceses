@@ -44,7 +44,7 @@ class Fitter(Process):
         curr_pixels = self._get_pixels_in_current_batch()
         self.guess = self.h5_guess[curr_pixels, :]
 
-        if self.verbose:
+        if self.verbose and self.mpi_rank == 0:
             print('Guess of shape: {}'.format(self.guess.shape))
             
     def _write_results_chunk(self):
@@ -70,8 +70,12 @@ class Fitter(Process):
             
         curr_pixels = self._get_pixels_in_current_batch()
 
-        if self.verbose:
-            print('Writing data of shape: {} and dtype: {} to positions: {} in HDF5 dataset:{}:'.format(source_dset.shape, source_dset.dtype, curr_pixels, targ_dset))
+        if self.verbose and self.mpi_rank == 0:
+            print('Writing data of shape: {} and dtype: {} to position range: {} '
+                  'in HDF5 dataset:{}'.format(source_dset.shape,
+                                              source_dset.dtype,
+                                              [curr_pixels[0],curr_pixels[-1]],
+                                              targ_dset))
         targ_dset[curr_pixels, :] = source_dset
         
     def _create_guess_datasets(self):
