@@ -8,7 +8,7 @@
 #PBS -M somnaths@ornl.gov
 ### Node spec, number of nodes and processors per node that you desire.
 ### One node and 16 cores per node in this case.
-#PBS -l nodes=2:ppn=36
+#PBS -l nodes=1:ppn=36
 ### Tell PBS the anticipated runtime for your job, where walltime=HH:MM:S.
 #PBS -l walltime=0:00:30:0
 ### The LDAP group list they need; cades-birthright in this case.
@@ -30,10 +30,10 @@ module load python/3.6.3
 module list
 
 
-##### GIV SPECIFIC BITS:
-EGNAME=giv_bayesian
-DATA_PATH=$HOME/giv/pzt_nanocap_6_just_translation_filt_resh_copy.h5
-SCRIPTS_PATH=$HOME/mpi_tutorials/$EGNAME
+##### BE SHO SPECIFIC BITS:
+EGNAME=be_sho
+DATA_PATH=$HOME/BE_SHO_Fitting/data/BELine_0009_just_translation.h5
+SCRIPTS_PATH=$HOME/BE_SHO_Fitting/code
 WORK_PATH=/lustre/or-hydra/cades-ccsd/syz/pycroscopy_ensemble
 
 cd $WORK_PATH
@@ -44,15 +44,12 @@ cd $EGNAME
 pwd
 
 ### Copy data:
-DATA_NAME=giv_raw.h5
+DATA_NAME=be_line.h5
 rm -rf $DATA_NAME
 cp $DATA_PATH $DATA_NAME
 
-### Copy python files:
-cp $SCRIPTS_PATH/mpi_process.py .
-cp $SCRIPTS_PATH/giv_bayesian_mpi.py .
-cp $SCRIPTS_PATH/giv_utils.py .
-cp $SCRIPTS_PATH/bayesian_script_mpi.py .
+### Copy python source code:
+cp $SCRIPTS_PATH/*.py .
 
 # See the contents in Lustre to make sure they are OK
 ls -hl
