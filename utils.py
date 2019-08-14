@@ -1,7 +1,12 @@
 import numpy as np
-import h5py
 import sys
+from scipy.signal import find_peaks_cwt
+
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
+from pyUSID.io.hdf_utils import get_auxiliary_datasets
+
+from be_sho import SHOestimateGuess, SHOfunc
+
 
 def reshape_to_one_step(raw_mat, num_steps):
     """
@@ -71,8 +76,6 @@ def is_reshapable(h5_main, step_start_inds=None):
     reshapable : Boolean
         Whether or not the number of bins per step are constant in this dataset
     """
-    from pyUSID.io.hdf_utils import get_auxiliary_datasets
-    
     if step_start_inds is None:
         h5_spec_inds = get_auxiliary_datasets(h5_main, aux_dset_name=['Spectroscopic_Indices'])[0]
         step_start_inds = np.where(h5_spec_inds[0] == 0)[0]
@@ -82,7 +85,6 @@ def is_reshapable(h5_main, step_start_inds=None):
     step_types = np.unique(num_bins)
     return len(step_types) == 1
 
-from scipy.signal import find_peaks_cwt
 
 def r_square(data_vec, func, *args, **kwargs):
     """
@@ -113,6 +115,7 @@ def r_square(data_vec, func, *args, **kwargs):
 
     return r_squared
 
+
 def wavelet_peaks(vector, peak_width_bounds, peak_width_step=20, **kwargs):
     """
     This is the function that will be mapped by multiprocess. This is a wrapper around the scipy function.
@@ -135,7 +138,6 @@ def wavelet_peaks(vector, peak_width_bounds, peak_width_step=20, **kwargs):
 
     return peak_indices
 
-from be_sho import SHOestimateGuess, SHOfunc
 
 def complex_gaussian(resp_vec, w_vec, num_points=5):
         """
