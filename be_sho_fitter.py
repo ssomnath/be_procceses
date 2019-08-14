@@ -9,7 +9,8 @@ from scipy.optimize import least_squares
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
 from pyUSID import USIDataset
 from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_spec_dsets, \
-                                create_empty_dataset, get_auxiliary_datasets, write_main_dataset
+                                create_empty_dataset, write_main_dataset
+from pyUSID.processing.comp_utils import recommend_cpu_cores
 
 # From this project:
 from utils import *
@@ -338,12 +339,14 @@ class BESHOfitter(Fitter):
         values = [joblib.delayed(least_squares)(sho_error, pix_guess,
                                          args=[pulse_resp, self.freq_vec],
                                          **solver_options) for pulse_resp, pix_guess in zip(self.data, self.guess)]
-        self._results = joblib.Parallel(n_jobs=3)(values)
+        cores = recommend_cpu_cores(self.data.shape[0], verbose=self.verbose)
+        self._results = joblib.Parallel(n_jobs=cores)(values)
         
         if self.verbose:
             print('Finished computing fits on {} spectras. Results currently of length: {}'.format(self.data.shape[0], len(self._results)))
                   
-        # What least_squares returns is in fact an object so we need to reformat the results. This is handled by the write function
+        # What least_squares returns is an object that needs to be extracted
+        # to get the coefficients. This is handled by the write function
         
     def _reformat_results(self, results, strategy='wavelet_peaks'):
         """
