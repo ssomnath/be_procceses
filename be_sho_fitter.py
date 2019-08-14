@@ -172,13 +172,10 @@ class BESHOfitter(Fitter):
         """
         Writes the provided chunk of data into the guess or fit datasets. 
         This method is responsible for any and all book-keeping.
-
-        Parameters
-        ---------
-        is_guess : Boolean
-            Flag that differentiates the guess from the fit
         """
-        self._results = self._reformat_results(self._results, self.parms_dict['algorithm'])
+        prefix = 'guess' if self._is_guess else 'fit'
+        self._results = self._reformat_results(self._results,
+                                               self.parms_dict[prefix + '-algorithm'])
         
         if self._is_guess:
             self.guess = np.hstack(tuple(self._results))
@@ -206,7 +203,7 @@ class BESHOfitter(Fitter):
         
         Move generic code to Fitter
         """
-        self.parms_dict = {'SHO_guess_method': "pycroscopy BESHO"}
+        self.parms_dict = {'guess-method': "pycroscopy BESHO"}
         
         if not isinstance(guess_func, SHOGuessFunc):
             raise TypeError('Please supply SHOGuessFunc.complex_gaussian or SHOGuessFunc.wavelet_peaks for the guess_func')
@@ -217,8 +214,8 @@ class BESHOfitter(Fitter):
             
             num_points=func_kwargs.pop('num_points', 5)
             
-            self.parms_dict.update({'algorithm': 'complex_gaussian',
-                                    'num_points': num_points})
+            self.parms_dict.update({'guess-algorithm': 'complex_gaussian',
+                                    'guess-complex_gaussian-num_points': num_points})
             
             partial_func = partial(complex_gaussian, w_vec=self.freq_vec, 
                                    num_points=num_points)
@@ -228,9 +225,9 @@ class BESHOfitter(Fitter):
             peak_width_bounds = func_kwargs.pop('peak_width_bounds', [10, 200])
             peak_width_step = func_kwargs.pop('peak_width_step', 20)
             
-            self.parms_dict.update({'algorithm': 'wavelet_peaks',
-                                    'peak_width_bounds': peak_width_bounds,
-                                    'peak_width_step': peak_width_step})
+            self.parms_dict.update({'guess_algorithm': 'wavelet_peaks',
+                                    'guess-wavelet_peaks-peak_width_bounds': peak_width_bounds,
+                                    'guess-wavelet_peaks-peak_width_step': peak_width_step})
             
             if len(func_args) > 0:
                 # Assume that the first argument is what we are looking for
@@ -251,7 +248,7 @@ class BESHOfitter(Fitter):
         self._map_function = partial_func
         self._unit_computation = super(BESHOfitter, self)._unit_computation
         self._create_results_datasets = self._create_guess_datasets
-        self._max_pos_per_read = self._max_raw_pos_per_read // 1.2
+        self._max_pos_per_read = 500 # self._max_raw_pos_per_read // 1.2
         
     def set_up_fit(self, fit_func=SHOFitFunc.least_squares, 
                    *func_args, h5_partial_fit=None, h5_guess=None, **func_kwargs):
@@ -260,14 +257,14 @@ class BESHOfitter(Fitter):
         Should Guess be its own Process class in that case? If so, it would end up having 
         its own group etc.
         """
-        self.parms_dict = {'SHO_fit_method': "pycroscopy BESHO"}
+        self.parms_dict = {'fit-method': "pycroscopy BESHO"}
         
         if not isinstance(fit_func, SHOFitFunc):
             raise TypeError('Please supply SHOFitFunc.least_squares for the fit_func')
                 
         if fit_func == SHOFitFunc.least_squares:
                                     
-            self.parms_dict.update({'algorithm': 'least_squares'})  
+            self.parms_dict.update({'fit-algorithm': 'least_squares'})
              
         self._is_guess = False
         
@@ -324,7 +321,7 @@ class BESHOfitter(Fitter):
 
         # We want compute to call our own manual unit computation function:
         self._unit_computation = self._unit_compute_fit
-        self._max_pos_per_read = self._max_raw_pos_per_read // 1.4
+        self._max_pos_per_read = 500 # self._max_raw_pos_per_read // 1.4
            
     def _unit_compute_fit(self, *args, **kwargs):
         # At this point data has been read in. Read in the guess as well:
