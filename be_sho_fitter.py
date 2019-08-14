@@ -224,15 +224,15 @@ class BESHOfitter(Fitter):
             
             peak_width_bounds = func_kwargs.pop('peak_width_bounds', [10, 200])
             peak_width_step = func_kwargs.pop('peak_width_step', 20)
-            
-            self.parms_dict.update({'guess_algorithm': 'wavelet_peaks',
-                                    'guess-wavelet_peaks-peak_width_bounds': peak_width_bounds,
-                                    'guess-wavelet_peaks-peak_width_step': peak_width_step})
-            
+
             if len(func_args) > 0:
                 # Assume that the first argument is what we are looking for
                 peak_width_bounds = func_args[0]
             
+            self.parms_dict.update({'guess_algorithm': 'wavelet_peaks',
+                                    'guess-wavelet_peaks-peak_width_bounds': peak_width_bounds,
+                                    'guess-wavelet_peaks-peak_width_step': peak_width_step})
+
             partial_func = partial(wavelet_peaks, peak_width_bounds=peak_width_bounds, 
                                    peak_width_step=peak_width_step, **func_kwargs)
                         
@@ -248,7 +248,7 @@ class BESHOfitter(Fitter):
         self._map_function = partial_func
         self._unit_computation = super(BESHOfitter, self)._unit_computation
         self._create_results_datasets = self._create_guess_datasets
-        self._max_pos_per_read = 500 # self._max_raw_pos_per_read // 1.2
+        self._max_pos_per_read = self._max_raw_pos_per_read // 1.2
         
     def set_up_fit(self, fit_func=SHOFitFunc.least_squares, 
                    *func_args, h5_partial_fit=None, h5_guess=None, **func_kwargs):
@@ -321,7 +321,7 @@ class BESHOfitter(Fitter):
 
         # We want compute to call our own manual unit computation function:
         self._unit_computation = self._unit_compute_fit
-        self._max_pos_per_read = 500 # self._max_raw_pos_per_read // 1.4
+        self._max_pos_per_read = self._max_raw_pos_per_read // 1.4
            
     def _unit_compute_fit(self, *args, **kwargs):
         # At this point data has been read in. Read in the guess as well:
