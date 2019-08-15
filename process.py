@@ -149,6 +149,9 @@ class Process(object):
             # TypeError (NoneType) etc.
             self.__resume_implemented = True
 
+        if self.verbose:
+            print('Rank {} nearly ended init of Process'.format(self.mpi_rank))
+
         if self.mpi_rank == 0:
             print('Consider calling test() to check results before calling compute() which computes on the entire'
                   ' dataset and writes back to the HDF5 file')
