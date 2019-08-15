@@ -52,8 +52,6 @@ def main(input_data_path):
         print(h5_guess)
         usid.hdf_utils.print_tree(h5_f)
 
-    """
-    
     proc.set_up_fit()
 
     if MPI is not None:
@@ -70,8 +68,6 @@ def main(input_data_path):
     if mpi_rank == 0:
         print(h5_fit)
         usid.hdf_utils.print_tree(h5_f)
-        
-    """
 
     if MPI is not None:
         MPI.COMM_WORLD.barrier()
