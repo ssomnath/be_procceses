@@ -118,12 +118,12 @@ class Process(object):
 
         # Saving these as properties of the object:
         if verbose:
-            print('Upgrading from a regular h5py.Dataset to a USIDataset')
+            print('Rank {}: Upgrading from a regular h5py.Dataset to a USIDataset'.format(self.mpi_rank))
         self.h5_main = USIDataset(h5_main)
         if MPI is not None:
             MPI.COMM_WORLD.barrier()
         if verbose:
-            print('the HDF5 dataset is now a USIDataset')
+            print('Rank {}: The HDF5 dataset is now a USIDataset'.format(self.mpi_rank))
         self.verbose = verbose
         self._cores = None
         self.__ranks_on_socket = 1
