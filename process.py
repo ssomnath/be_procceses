@@ -46,7 +46,9 @@ class Process(object):
         if h5_main.file.mode != 'r+':
             raise TypeError('Need to ensure that the file is in r+ mode to write results back to the file')
 
+        print('About to get MPI')
         MPI = get_MPI()
+        print('Got MPI')
 
         if MPI is not None:
             # If we came here then, the user has intentionally asked for multi-node computation
