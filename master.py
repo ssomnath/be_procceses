@@ -2,6 +2,8 @@ import sys
 import h5py
 import pyUSID as usid
 
+from process import Process
+from fitter import Fitter
 from be_sho_fitter import BESHOfitter
 
 
@@ -27,8 +29,9 @@ def main(input_data_path):
         print(h5_main)
         usid.hdf_utils.print_tree(h5_f)
 
-    proc = BESHOfitter(h5_main, verbose=True)
+    proc = Process(h5_main, verbose=True)
 
+    """
     if mpi_rank == 0:
         print('*** Instantiated the fitter ***')
 
@@ -65,6 +68,7 @@ def main(input_data_path):
     if mpi_rank == 0:
         print(h5_fit)
         usid.hdf_utils.print_tree(h5_f)
+    """
 
     h5_f.close()
 
