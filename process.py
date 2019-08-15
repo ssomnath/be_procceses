@@ -116,14 +116,16 @@ class Process(object):
             MPI.COMM_WORLD.barrier()
         # Not sure if we need a barrier here.
 
-        # Saving these as properties of the object:
-        if verbose:
+        if verbose and self.mpi_rank == 0:
             print('Rank {}: Upgrading from a regular h5py.Dataset to a USIDataset'.format(self.mpi_rank))
+
+        # Generation of N-dimensional form would break things for some reason.
         self.h5_main = USIDataset(h5_main)
-        if MPI is not None:
-            MPI.COMM_WORLD.barrier()
-        if verbose:
+
+        if verbose and self.mpi_rank == 0:
             print('Rank {}: The HDF5 dataset is now a USIDataset'.format(self.mpi_rank))
+
+        # Saving these as properties of the object:
         self.verbose = verbose
         self._cores = None
         self.__ranks_on_socket = 1
@@ -139,8 +141,6 @@ class Process(object):
 
         # Determining the max size of the data that can be put into memory
         # all ranks go through this and they need to have this value any
-        if verbose and self.mpi_rank == 0:
-            print('Calculating memory and core numbers')
         self._set_memory_and_cores(cores=cores, man_mem_limit=max_mem_mb,
                                    mem_multiplier=mem_multiplier)
         if verbose and self.mpi_rank == 0:
@@ -174,9 +174,6 @@ class Process(object):
             # AttributeError for self.var_name that don't exist
             # TypeError (NoneType) etc.
             self.__resume_implemented = True
-
-        if self.verbose:
-            print('Rank {} nearly ended init of Process'.format(self.mpi_rank))
 
         if self.mpi_rank == 0:
             print('Consider calling test() to check results before calling compute() which computes on the entire'
@@ -543,7 +540,7 @@ class Process(object):
             # expected to be the same for all ranks so just use this.
             print('Rank {}: Workers on this socket allowed to read {} '
                   'positions of the {} per chunk'
-                  '.'.format(self.mpi_rank, title, self._max_pos_per_read))
+                  '.'.format(self.mpi_rank, self._max_pos_per_read, title))
 
     @staticmethod
     def _map_function(*args, **kwargs):

@@ -39,9 +39,6 @@ class BESHOfitter(Fitter):
     def __init__(self, h5_main, **kwargs):
         super(BESHOfitter, self).__init__(h5_main, variables=['Frequency'], **kwargs)
 
-        if self.verbose:
-            print('Rank {} at BESHOFitter: Just finished coming out of Fitter'.format(self.mpi_rank))
-
         self.process_name = "SHO_Fit"
         self.parms_dict = None
         
@@ -64,9 +61,6 @@ class BESHOfitter(Fitter):
         # set limits in the set up functions
 
         self.results_pix_byte_size = sho32.itemsize * self.num_udvs_steps
-
-        if self.verbose:
-            print('Rank {} at BESHOFitter: Just finished init'.format(self.mpi_rank))
             
     def _get_frequency_vector(self):
         """
@@ -276,7 +270,7 @@ class BESHOfitter(Fitter):
     def _unit_compute_fit(self, *args, **kwargs):
         # At this point data has been read in. Read in the guess as well:
         self._read_guess_chunk()
-
+        # TODO: Generalize this bit. Use Parallel compute instead!
         solver_options={'jac': 'cs'}
 
         if self.mpi_size > 1:
