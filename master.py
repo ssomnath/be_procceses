@@ -19,9 +19,6 @@ def main(input_data_path):
             print('*** Master script called using mpirun ***')
         h5_kwargs.update({'driver': 'mpio', 'comm': MPI.COMM_WORLD})
 
-    if mpi_rank == 0:
-        print('h5py kwargs: {}'.format(h5_kwargs))
-
     h5_f = h5py.File(input_data_path, **h5_kwargs)
     
     h5_main = h5_f['Measurement_000/Channel_000/Raw_Data']
@@ -64,11 +61,7 @@ def main(input_data_path):
     if MPI is not None:
         MPI.COMM_WORLD.barrier()
 
-    print('Rank {}: about to close the file'.format(mpi_rank))
-
     h5_f.close()
-
-    print('Rank {}: exiting'.format(mpi_rank))
 
 
 if __name__ == "__main__":
