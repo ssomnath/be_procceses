@@ -415,8 +415,8 @@ class Process(object):
         # Remember that multiple processes (either via MPI or joblib) will share this socket
         # This makes logical sense but there's always too much free memory and the
         # cores are starved.
-        # max_data_chunk = self._max_mem_mb / (self._cores * self.__ranks_on_socket)
-        max_data_chunk = self._max_mem_mb
+        max_data_chunk = self._max_mem_mb / (self._cores * self.__ranks_on_socket)
+        # max_data_chunk = self._max_mem_mb
 
         # Now calculate the number of positions OF RAW DATA ONLY that can be stored in memory in one go PER RANK
         mb_per_position = self.h5_main.dtype.itemsize * self.h5_main.shape[1] / 1024 ** 2
