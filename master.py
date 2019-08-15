@@ -34,11 +34,12 @@ def main(input_data_path):
 
     proc = BESHOfitter(h5_main, verbose=True)
 
-    """
     if mpi_rank == 0:
         print('*** Instantiated the fitter ***')
 
     proc.set_up_guess()
+
+    """
 
     if mpi_rank == 0:
         print('*** Set up the guess ***')
