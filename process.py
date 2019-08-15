@@ -433,7 +433,7 @@ class Process(object):
                   'to use {} of RAM'
                   '.'.format(self.mpi_rank,
                              self._cores * self.__ranks_on_socket,
-                             max_mem_per_worker))
+                             format_size(max_mem_per_worker)))
 
         # Now calculate the number of positions OF RAW DATA ONLY that can be
         # stored in memory in one go PER worker
@@ -450,7 +450,7 @@ class Process(object):
             # expected to be the same for all ranks so just use this.
             print('Rank {}: Workers on this socket allowed to read {} '
                   'positions of the SOURCE dataset per chunk'
-                  '.'.format(self._max_pos_per_read))
+                  '.'.format(self.mpi_rank, self._max_pos_per_read))
 
     @staticmethod
     def _map_function(*args, **kwargs):
