@@ -258,7 +258,9 @@ class Process(object):
             print('Checking for duplicates:')
 
         # This list will contain completed runs only
-        duplicate_h5_groups = check_for_old(self.h5_main, self.process_name, new_parms=self.parms_dict, verbose=self.verbose)
+        duplicate_h5_groups = check_for_old(self.h5_main, self.process_name,
+                                            new_parms=self.parms_dict,
+                                            verbose=self.verbose and self.mpi_rank==0)
         partial_h5_groups = []
 
         # First figure out which ones are partially completed:
