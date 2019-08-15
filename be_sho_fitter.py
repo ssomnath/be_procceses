@@ -39,6 +39,9 @@ class BESHOfitter(Fitter):
     def __init__(self, h5_main, **kwargs):
         super(BESHOfitter, self).__init__(h5_main, variables=['Frequency'], **kwargs)
 
+        if self.verbose:
+            print('Rank {} at BESHOFitter: Just finished coming out of Fitter'.format(self.mpi_rank))
+
         self.process_name = "SHO_Fit"
         self.parms_dict = None
         
@@ -59,6 +62,9 @@ class BESHOfitter(Fitter):
         # accounting for memory copies
         self._max_raw_pos_per_read = self._max_pos_per_read
         # set limits in the set up functions
+
+        if self.verbose:
+            print('Rank {} at BESHOFitter: Just finished init'.format(self.mpi_rank))
             
     def _get_frequency_vector(self):
         """

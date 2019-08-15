@@ -13,6 +13,8 @@ class Fitter(Process):
     def __init__(self, h5_main, variables=None, **kwargs):
         super(Fitter, self).__init__(h5_main, **kwargs)
         self.h5_main = USIDataset(self.h5_main)
+        if self.verbose:
+            print('Rank {} at Fitter: Just finished coming out of Process'.format(self.mpi_rank))
         
         # Validate other arguments / kwargs here:
         if variables is not None:
@@ -30,6 +32,9 @@ class Fitter(Process):
         
         self._is_guess = True
         self.__mode = 0  # 0 for Guess pending, 1 for Fit pending, 2 for fit complete
+
+        if self.verbose:
+            print('Rank {} at Fitter: Just finished init'.format(self.mpi_rank))
         
     def _read_guess_chunk(self):
         """
