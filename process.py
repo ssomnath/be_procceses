@@ -30,7 +30,7 @@ class Process(object):
     """
 
     def __init__(self, h5_main, cores=None, max_mem_mb=4*1024,
-                 mem_multiplier=1, verbose=False):
+                 mem_multiplier=1.0, verbose=False):
         """
         Parameters
         ----------
@@ -416,7 +416,7 @@ class Process(object):
             # self._cores = self.__cores_per_rank = psutil.cpu_count() // self.__ranks_on_socket
 
     def _set_memory_and_cores(self, cores=None, man_mem_limit=None,
-                              mem_multiplier=1):
+                              mem_multiplier=1.0):
         """
         Checks hardware limitations such as memory, number of CPU cores and sets the recommended data chunk sizes and
         the number of cores to be used by analysis methods. This function can work with clusters with heterogeneous
@@ -444,7 +444,7 @@ class Process(object):
         self.__set_memory(man_mem_limit=man_mem_limit,
                           mem_multiplier=mem_multiplier)
 
-    def __set_memory(self, man_mem_limit=None, mem_multiplier=1):
+    def __set_memory(self, man_mem_limit=None, mem_multiplier=1.0):
         """
         Checks memory capabilities of each node and sets the recommended data
         chunk sizes to be used by analysis methods.
