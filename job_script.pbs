@@ -6,9 +6,9 @@
 #PBS -M somnaths@ornl.gov
 ### Node spec, number of nodes and processors per node that you desire.
 ### One node and 36 cores per node in this case.
-#PBS -l nodes=1:ppn=4
+#PBS -l nodes=2:ppn=36
 ### Tell PBS the anticipated runtime for your job, where walltime=HH:MM:S.
-#PBS -l walltime=0:00:20:0
+#PBS -l walltime=0:00:30:0
 ### The LDAP group list they need; cades-birthright in this case.
 #PBS -W group_list=cades-ccsd
 ### Your account type. Birthright in this case.
