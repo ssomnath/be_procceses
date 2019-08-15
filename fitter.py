@@ -11,8 +11,8 @@ from process import Process
 class Fitter(Process):
     
     def __init__(self, h5_main, variables=None, **kwargs):
+        print('******* Fitter calling Process *****')
         super(Fitter, self).__init__(h5_main, **kwargs)
-        self.h5_main = USIDataset(self.h5_main)
         if self.verbose:
             print('Rank {} at Fitter: Just finished coming out of Process'.format(self.mpi_rank))
         
