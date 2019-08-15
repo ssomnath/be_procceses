@@ -1,4 +1,5 @@
 import sys
+import time
 import h5py
 import pyUSID as usid
 
@@ -7,7 +8,6 @@ from be_sho_fitter import BESHOfitter
 
 def main(input_data_path):
 
-    # Dynamically change mode etc.
     MPI = usid.comp_utils.get_MPI()
 
     h5_kwargs = {'mode': 'r+'}
@@ -26,11 +26,7 @@ def main(input_data_path):
     
     h5_main = h5_f['Measurement_000/Channel_000/Raw_Data']
 
-    if mpi_rank == 0:
-        print(h5_main)
-        usid.hdf_utils.print_tree(h5_f)
-
-    proc = BESHOfitter(h5_main, verbose=True)
+    proc = BESHOfitter(h5_main, verbose=False)
 
     if mpi_rank == 0:
         print('*** Instantiated the fitter ***')
@@ -38,19 +34,18 @@ def main(input_data_path):
     proc.set_up_guess()
 
     if mpi_rank == 0:
-        print('*** Set up the guess ***')
+        print('*** Finished set up of guess ***')
 
     if MPI is not None:
         MPI.COMM_WORLD.barrier()
 
-    h5_guess = proc.do_guess()
+    if mpi_rank == 0:
+        t0 = time.time()
+
+    _ = proc.do_guess()
 
     if mpi_rank == 0:
-        print('*** Guess complete ***')
-
-    if mpi_rank == 0:
-        print(h5_guess)
-        usid.hdf_utils.print_tree(h5_f)
+        print('*** Guess completed in ' + usid.io_utils.format_time(time.time() - t0) + ' ***')
 
     proc.set_up_fit()
 
@@ -58,16 +53,13 @@ def main(input_data_path):
         MPI.COMM_WORLD.barrier()
 
     if mpi_rank == 0:
-        print('*** Set up fit ***')
+        t0 = time.time()
+        print('*** Finished set up of fit ***')
 
-    h5_fit = proc.do_fit()
-
-    if mpi_rank == 0:
-        print('*** Fit complete ***')
+    _ = proc.do_fit()
 
     if mpi_rank == 0:
-        print(h5_fit)
-        usid.hdf_utils.print_tree(h5_f)
+        print('*** Fit completed in ' + usid.io_utils.format_time(time.time() - t0) + ' ***')
 
     if MPI is not None:
         MPI.COMM_WORLD.barrier()
