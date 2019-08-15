@@ -332,21 +332,26 @@ class BESHOfitter(Fitter):
     def _unit_compute_fit(self, *args, **kwargs):
         # At this point data has been read in. Read in the guess as well:
         self._read_guess_chunk()
-        # Call joblib directly now and then parallel compute manually:
-        
-        # result = least_squares(sho_error, guess_parms, args=(resp_vec, freq_vec))
-        """
-        least_squares(fun, x0, jac='2-point', bounds=(-inf, inf), method='trf', ftol=1e-08, 
-                      xtol=1e-08, gtol=1e-08, x_scale=1.0, loss='linear', f_scale=1.0, diff_step=None, 
-                      tr_solver=None, tr_options={}, jac_sparsity=None, max_nfev=None, verbose=0, args=(), kwargs={}
-        """
+
         solver_options={'jac': 'cs'}
-        
-        values = [joblib.delayed(least_squares)(sho_error, pix_guess,
-                                         args=[pulse_resp, self.freq_vec],
-                                         **solver_options) for pulse_resp, pix_guess in zip(self.data, self.guess)]
-        cores = recommend_cpu_cores(self.data.shape[0], verbose=self.verbose)
-        self._results = joblib.Parallel(n_jobs=cores)(values)
+
+        if self.mpi_size > 1:
+            if self.verbose:
+                print('Rank {}: About to start serial computation'
+                      '.'.format(self.mpi_rank))
+
+            self._results = list()
+            for pulse_resp, guess_parms in zip(self.data, self.guess):
+                curr_results = least_squares(sho_error, guess_parms,
+                                             args=(pulse_resp, self.freq_vec),
+                                             **solver_options)
+                self._results.append(curr_results)
+        else:
+            # Call joblib directly now and then parallel compute later on:
+            values = [joblib.delayed(least_squares)(sho_error, pix_guess, args=[pulse_resp, self.freq_vec],
+                                             **solver_options) for pulse_resp, pix_guess in zip(self.data, self.guess)]
+            cores = recommend_cpu_cores(self.data.shape[0], verbose=self.verbose)
+            self._results = joblib.Parallel(n_jobs=cores)(values)
         
         if self.verbose and self.mpi_rank == 0:
             print('Finished computing fits on {} spectras. Results currently of length: {}'.format(self.data.shape[0], len(self._results)))
