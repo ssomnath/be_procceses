@@ -108,7 +108,7 @@ class Process(object):
         self.__ranks_on_socket = 1
         self.__socket_master_rank = 0
         self._max_pos_per_read = None
-        self._max_mem_mb = None
+        self._max_mem_bytes = None
 
         # Now have to be careful here since the below properties are a function of the MPI rank
         self.__start_pos = None
@@ -118,7 +118,7 @@ class Process(object):
 
         # Determining the max size of the data that can be put into memory
         # all ranks go through this and they need to have this value any
-        self._set_memory_and_cores(cores=cores, mem=max_mem_mb)
+        self._set_memory_and_cores(cores=cores, man_mem_limit=max_mem_mb)
         self.duplicate_h5_groups = []
         self.partial_h5_groups = []
         self.process_name = None  # Reset this in the extended classes
@@ -361,7 +361,8 @@ class Process(object):
 
         self.h5_results_grp = h5_partial_group
 
-    def _set_memory_and_cores(self, cores=None, mem=None):
+    # TODO: Break into 2 separate and smaller functions
+    def _set_memory_and_cores(self, cores=None, man_mem_limit=None):
         """
         Checks hardware limitations such as memory, number of CPU cores and sets the recommended data chunk sizes and
         the number of cores to be used by analysis methods. This function can work with clusters with heterogeneous
@@ -371,7 +372,7 @@ class Process(object):
         ----------
         cores : uint, optional, Default = 1
             How many cores to use for the computation.
-        mem : uint, optional, Default = 1024
+        man_mem_limit : uint, optional, Default = None (all available memory)
             The amount a memory in Mb to use in the computation
         """
         if self.mpi_comm is None:
@@ -396,38 +397,60 @@ class Process(object):
             # how many in this socket?
             self.__ranks_on_socket = ranks_on_this_socket.size
             # Force usage of all available memory
-            mem = None
+            man_mem_limit = None
             self._cores = 1
             # Disabling the following line since mpi4py and joblib didn't play well for Bayesian Inference
             # self._cores = self.__cores_per_rank = psutil.cpu_count() // self.__ranks_on_socket
 
-        # TODO: Convert all to bytes!
-        _max_mem_mb = get_available_memory() / 1024 ** 2  # in MB
-        if mem is None:
-            mem = _max_mem_mb
-        else:
-            if not isinstance(mem, int):
-                raise TypeError('mem must be a whole number')
-            mem = abs(mem)
+        avail_mem_bytes = get_available_memory()  # in bytes
+        if self.verbose and self.mpi_rank == self.__socket_master_rank:
+            # expected to be the same for all ranks so just use this.
+            print('Rank {} - on socket with {} cores and {} avail. RAM shared '
+                  'by {} ranks each given {} cores'
+                  '.'.format(self.__socket_master_rank, psutil.cpu_count(),
+                             format_size(avail_mem_bytes),
+                             self.__ranks_on_socket, self._cores))
 
-        self._max_mem_mb = min(_max_mem_mb, mem)
+        if man_mem_limit is None:
+            man_mem_limit = avail_mem_bytes
+        else:
+            if not isinstance(man_mem_limit, int):
+                raise TypeError('man_mem_limit must be a whole number')
+            # Note that man_mem_limit is specified in mega bytes
+            man_mem_limit = abs(man_mem_limit) * 1024 ** 2  # in bytes
+            if self.verbose and self.mpi_rank == 0:
+                print('User has requested to use no more than {} of memory'
+                      '.'.format(format_size(man_mem_limit)))
+
+        # TODO: Make this an internal variable
+        self._max_mem_bytes = min(avail_mem_bytes, man_mem_limit)
 
         # Remember that multiple processes (either via MPI or joblib) will share this socket
         # This makes logical sense but there's always too much free memory and the
         # cores are starved.
-        max_data_chunk = self._max_mem_mb / (self._cores * self.__ranks_on_socket)
-        # max_data_chunk = self._max_mem_mb
+        max_mem_per_worker = self._max_mem_bytes / (self._cores * self.__ranks_on_socket)
+        if self.verbose and self.mpi_rank == self.__socket_master_rank:
+            print('Rank {}: Each of the {} workers on this socket are allowed '
+                  'to use {} of RAM'
+                  '.'.format(self.mpi_rank,
+                             self._cores * self.__ranks_on_socket,
+                             max_mem_per_worker))
 
-        # Now calculate the number of positions OF RAW DATA ONLY that can be stored in memory in one go PER RANK
-        mb_per_position = self.h5_main.dtype.itemsize * self.h5_main.shape[1] / 1024 ** 2
-        self._max_pos_per_read = int(np.floor(max_data_chunk / mb_per_position))
+        # Now calculate the number of positions OF RAW DATA ONLY that can be
+        # stored in memory in one go PER worker
+        # TODO: Allow child process to specify a multiplier that accounts for results etc.
+        bytes_per_pos = self.h5_main.dtype.itemsize * self.h5_main.shape[1]
+        if self.verbose and self.mpi_rank == 0:
+            print('Each position in the SOURCE dataset is {} large'
+                  '.'.format(format_size(bytes_per_pos)))
+
+        self._max_pos_per_read = int(np.floor(max_mem_per_worker / bytes_per_pos))
 
         if self.verbose and self.mpi_rank == self.__socket_master_rank:
             # expected to be the same for all ranks so just use this.
-            print('Rank {} - on socket with {} logical cores and {} avail. RAM shared by {} ranks each given {} cores'
-                  '.'.format(self.__socket_master_rank, psutil.cpu_count(), format_size(_max_mem_mb * 1024**2, 2),
-                             self.__ranks_on_socket, self._cores))
-            print('Allowed to read {} pixels per chunk'.format(self._max_pos_per_read))
+            print('Rank {}: Workers on this socket allowed to read {} '
+                  'positions of the SOURCE dataset per chunk'
+                  '.'.format(self._max_pos_per_read))
 
     @staticmethod
     def _map_function(*args, **kwargs):
