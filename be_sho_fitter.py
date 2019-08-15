@@ -63,6 +63,8 @@ class BESHOfitter(Fitter):
         self._max_raw_pos_per_read = self._max_pos_per_read
         # set limits in the set up functions
 
+        self.results_pix_byte_size = sho32.itemsize * self.num_udvs_steps
+
         if self.verbose:
             print('Rank {} at BESHOFitter: Just finished init'.format(self.mpi_rank))
             
@@ -254,7 +256,8 @@ class BESHOfitter(Fitter):
         self._map_function = partial_func
         self._unit_computation = super(BESHOfitter, self)._unit_computation
         self._create_results_datasets = self._create_guess_datasets
-        self._max_pos_per_read = self._max_raw_pos_per_read // 5
+
+        self._max_pos_per_read = self._max_raw_pos_per_read // 1.5
         
     def set_up_fit(self, fit_func=SHOFitFunc.least_squares, 
                    *func_args, h5_partial_fit=None, h5_guess=None, **func_kwargs):
@@ -327,7 +330,7 @@ class BESHOfitter(Fitter):
 
         # We want compute to call our own manual unit computation function:
         self._unit_computation = self._unit_compute_fit
-        self._max_pos_per_read = self._max_raw_pos_per_read // 5
+        self._max_pos_per_read = self._max_raw_pos_per_read // 1.75
            
     def _unit_compute_fit(self, *args, **kwargs):
         # At this point data has been read in. Read in the guess as well:
