@@ -108,7 +108,9 @@ class Process(object):
         self.__ranks_on_socket = 1
         self.__socket_master_rank = 0
         self._max_pos_per_read = None
+        # TODO: This variable does not need to be maintained:
         self._max_mem_bytes = None
+        self.__bytes_per_pos = None
 
         # Now have to be careful here since the below properties are a function of the MPI rank
         self.__start_pos = None
@@ -440,6 +442,7 @@ class Process(object):
         # stored in memory in one go PER worker
         # TODO: Allow child process to specify a multiplier that accounts for results etc.
         bytes_per_pos = self.h5_main.dtype.itemsize * self.h5_main.shape[1]
+        self.__bytes_per_pos = bytes_per_pos
         if self.verbose and self.mpi_rank == 0:
             print('Each position in the SOURCE dataset is {} large'
                   '.'.format(format_size(bytes_per_pos)))
@@ -479,10 +482,21 @@ class Process(object):
 
             # DON'T DIRECTLY apply the start and end indices anymore to the h5 dataset. Find out what it means first
             self.__pixels_in_batch = self._compute_jobs[self.__start_pos: self.__end_pos]
-            self.data = self.h5_main[self.__pixels_in_batch, :]
-            if self.verbose:
-                print('Rank {} - Read positions: {}'.format(self.mpi_rank, self.__pixels_in_batch, self.__rank_end_pos))
 
+            if self.verbose:
+                print('Rank {} will read positions: {}'.format(self.mpi_rank, self.__pixels_in_batch))
+                bytes_this_read = self.__bytes_per_pos * len(self.__pixels_in_batch)
+                print('Rank {} will read {} of the SOURCE dataset'
+                      '.'.format(self.mpi_rank, format_size(bytes_this_read)))
+                if self.mpi_rank == self.__socket_master_rank:
+                    tot_workers = self.__ranks_on_socket * self._cores
+                    print('Rank: {} avail. mem. {} workers on this socket will'
+                          'read in total read ~ {}'
+                          '.'.format(self.mpi_rank, get_available_memory(),
+                                     tot_workers,
+                                     bytes_this_read * tot_workers))
+
+            self.data = self.h5_main[self.__pixels_in_batch, :]
             # DON'T update the start position
 
         else:
