@@ -39,8 +39,6 @@ def main(input_data_path):
 
     proc.set_up_guess()
 
-    """
-
     if mpi_rank == 0:
         print('*** Set up the guess ***')
 
@@ -48,6 +46,8 @@ def main(input_data_path):
         MPI.COMM_WORLD.barrier()
 
     h5_guess = proc.do_guess()
+
+    """
 
     if mpi_rank == 0:
         print('*** Guess complete ***')
