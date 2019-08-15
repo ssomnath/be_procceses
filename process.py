@@ -580,9 +580,10 @@ class Process(object):
                       '.'.format(self.mpi_rank, format_size(bytes_this_read)))
                 if self.mpi_rank == self.__socket_master_rank:
                     tot_workers = self.__ranks_on_socket * self._cores
-                    print('Rank: {} avail. mem. {} workers on this socket will'
-                          'read in total read ~ {}'
-                          '.'.format(self.mpi_rank, get_available_memory(),
+                    print('Rank: {} available memory: {}. '
+                          '{} workers on this socket will in total read ~ {}'
+                          '.'.format(self.mpi_rank,
+                                     format_size(get_available_memory()),
                                      tot_workers,
                                      bytes_this_read * tot_workers))
 
