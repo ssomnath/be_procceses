@@ -17,9 +17,10 @@ from multiprocessing import cpu_count
 
 from pyUSID.processing.comp_utils import parallel_compute, get_MPI, group_ranks_by_socket, get_available_memory
 from pyUSID.io.hdf_utils import check_if_main, check_for_old, get_attributes
-from pyUSID.io.usi_data import USIDataset
 from pyUSID.io.dtype_utils import integers_to_slices
 from pyUSID.io.io_utils import format_time, format_size
+
+from usi_data import USIDataset
 
 
 class Process(object):

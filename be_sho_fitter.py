@@ -7,13 +7,13 @@ from functools import partial
 from scipy.optimize import least_squares
 
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
-from pyUSID import USIDataset
 from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_spec_dsets, \
                                 create_empty_dataset, write_main_dataset
 from pyUSID.processing.comp_utils import recommend_cpu_cores
 
 # From this project:
 from utils import *
+from usi_data import USIDataset
 from fitter import Fitter
 
 
