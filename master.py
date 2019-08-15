@@ -32,7 +32,7 @@ def main(input_data_path):
         print(h5_main)
         usid.hdf_utils.print_tree(h5_f)
 
-    proc = Fitter(h5_main, verbose=True)
+    proc = BESHOfitter(h5_main, verbose=True)
 
     """
     if mpi_rank == 0:
