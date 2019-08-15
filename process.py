@@ -526,6 +526,7 @@ class Process(object):
         """
         # TODO: Try to use the functools.partials to preconfigure the map function
         # cores = number of processes / rank here
+        print('Rank {} going in unit computation'.format(self.mpi_rank))
         self._results = parallel_compute(self.data, self._map_function, cores=self._cores,
                                          lengthy_computation=False,
                                          func_args=args, func_kwargs=kwargs,
@@ -745,39 +746,3 @@ class Process(object):
             self.h5_results_grp.attrs['last_pixel'] = self.h5_main.shape[0]
 
         return self.h5_results_grp
-
-
-def parallel_compute(data, func, cores=1, lengthy_computation=False, func_args=None, func_kwargs=None, verbose=False):
-    """
-    Computes the provided function using multiple cores using the joblib library
-
-    Parameters
-    ----------
-    data : numpy.ndarray
-        Data to map function to. Function will be mapped to the first axis of data
-    func : callable
-        Function to map to data
-    cores : uint, optional
-        Number of logical cores to use to compute
-        Default - 1 (serial computation)
-    lengthy_computation : bool, optional
-        Whether or not each computation is expected to take substantial time.
-        Sometimes the time for adding more cores can outweigh the time per core
-        Default - False
-    func_args : list, optional
-        arguments to be passed to the function
-    func_kwargs : dict, optional
-        keyword arguments to be passed onto function
-    verbose : bool, optional. default = False
-        Whether or not to print statements that aid in debugging
-    Returns
-    -------
-    results : list
-        List of computational results
-    """
-    from warnings import warn
-    warn('Please call this function either as pyUSID.processing.comp_utils.parallel_compute() or simply as '
-         'pyUSID.parallel_compute() instead in the future', FutureWarning)
-    from .comp_utils import parallel_compute
-    return parallel_compute(data, func, cores=cores, lengthy_computation=lengthy_computation, func_args=func_args,
-                            func_kwargs=func_kwargs, verbose=verbose)
