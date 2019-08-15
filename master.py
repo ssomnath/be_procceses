@@ -63,6 +63,9 @@ def main(input_data_path):
 
     h5_f.close()
 
+    if mpi_rank == 0:
+        print('***** Script complete *****')
+
 
 if __name__ == "__main__":
     main(sys.argv[1])
