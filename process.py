@@ -116,10 +116,12 @@ class Process(object):
         # Not sure if we need a barrier here.
 
         # Saving these as properties of the object:
-        if verbose and self.mpi_rank == 0:
+        if verbose:
             print('Upgrading from a regular h5py.Dataset to a USIDataset')
         self.h5_main = USIDataset(h5_main)
-        if verbose and self.mpi_rank == 0:
+        if MPI is not None:
+            MPI.COMM_WORLD.barrier()
+        if verbose:
             print('the HDF5 dataset is now a USIDataset')
         self.verbose = verbose
         self._cores = None
@@ -136,8 +138,12 @@ class Process(object):
 
         # Determining the max size of the data that can be put into memory
         # all ranks go through this and they need to have this value any
+        if verbose and self.mpi_rank == 0:
+            print('Calculating memory and core numbers')
         self._set_memory_and_cores(cores=cores, man_mem_limit=max_mem_mb,
                                    mem_multiplier=mem_multiplier)
+        if verbose and self.mpi_rank == 0:
+            print('Finished collecting info on memory and workers')
         self.duplicate_h5_groups = []
         self.partial_h5_groups = []
         self.process_name = None  # Reset this in the extended classes
