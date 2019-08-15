@@ -8,7 +8,7 @@
 ### One node and 36 cores per node in this case.
 #PBS -l nodes=1:ppn=24
 ### Tell PBS the anticipated runtime for your job, where walltime=HH:MM:S.
-#PBS -l walltime=0:00:15:0
+#PBS -l walltime=0:00:10:0
 ### The LDAP group list they need; cades-birthright in this case.
 #PBS -W group_list=cades-ccsd
 ### Your account type. Birthright in this case.
