@@ -840,6 +840,8 @@ class Process(object):
             for curr_slice in integers_to_slices(self.__pixels_in_batch):
                 self._h5_status_dset[curr_slice] = 1
 
+            break
+
             self._read_data_chunk()
 
         if self.verbose:
