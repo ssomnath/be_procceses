@@ -108,8 +108,6 @@ class Process(object):
         self.__ranks_on_socket = 1
         self.__socket_master_rank = 0
         self._max_pos_per_read = None
-        # TODO: This variable does not need to be maintained:
-        self._max_mem_bytes = None
         self.__bytes_per_pos = None
 
         # Now have to be careful here since the below properties are a function of the MPI rank
@@ -424,13 +422,12 @@ class Process(object):
                 print('User has requested to use no more than {} of memory'
                       '.'.format(format_size(man_mem_limit)))
 
-        # TODO: Make this an internal variable
-        self._max_mem_bytes = min(avail_mem_bytes, man_mem_limit)
+        max_mem_bytes = min(avail_mem_bytes, man_mem_limit)
 
         # Remember that multiple processes (either via MPI or joblib) will share this socket
         # This makes logical sense but there's always too much free memory and the
         # cores are starved.
-        max_mem_per_worker = self._max_mem_bytes / (self._cores * self.__ranks_on_socket)
+        max_mem_per_worker = max_mem_bytes / (self._cores * self.__ranks_on_socket)
         if self.verbose and self.mpi_rank == self.__socket_master_rank:
             print('Rank {}: Each of the {} workers on this socket are allowed '
                   'to use {} of RAM'
