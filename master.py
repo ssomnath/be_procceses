@@ -32,7 +32,7 @@ def main(input_data_path):
         print(h5_main)
         usid.hdf_utils.print_tree(h5_f)
 
-    proc = Process(h5_main, verbose=True)
+    proc = Fitter(h5_main, verbose=True)
 
     """
     if mpi_rank == 0:
@@ -72,9 +72,14 @@ def main(input_data_path):
         print(h5_fit)
         usid.hdf_utils.print_tree(h5_f)
     """
+    if MPI is not None:
+        MPI.COMM_WORLD.barrier()
+
     print('Rank {}: about to close the file'.format(mpi_rank))
 
     h5_f.close()
+
+    print('Rank {}: exiting'.format(mpi_rank))
 
 
 if __name__ == "__main__":
