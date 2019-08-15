@@ -83,6 +83,9 @@ class Process(object):
                 raise TypeError('The HDF5 file should have been opened with driver="mpio". Current driver = "{}"'
                                 ''.format(h5_main.file.driver))
 
+            if verbose and self.mpi_rank == 0:
+                print('Finished getting all necessary MPI information')
+
             """
             # Not sure how to check for this correctly
             messg = None
@@ -113,7 +116,11 @@ class Process(object):
         # Not sure if we need a barrier here.
 
         # Saving these as properties of the object:
+        if verbose and self.mpi_rank == 0:
+            print('Upgrading from a regular h5py.Dataset to a USIDataset')
         self.h5_main = USIDataset(h5_main)
+        if verbose and self.mpi_rank == 0:
+            print('the HDF5 dataset is now a USIDataset')
         self.verbose = verbose
         self._cores = None
         self.__ranks_on_socket = 1
