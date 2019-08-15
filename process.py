@@ -46,9 +46,7 @@ class Process(object):
         if h5_main.file.mode != 'r+':
             raise TypeError('Need to ensure that the file is in r+ mode to write results back to the file')
 
-        print('About to get MPI')
         MPI = get_MPI()
-        print('Got MPI')
 
         if MPI is not None:
             # If we came here then, the user has intentionally asked for multi-node computation
@@ -526,7 +524,6 @@ class Process(object):
         """
         # TODO: Try to use the functools.partials to preconfigure the map function
         # cores = number of processes / rank here
-        print('Rank {} going in unit computation'.format(self.mpi_rank))
         self._results = parallel_compute(self.data, self._map_function, cores=self._cores,
                                          lengthy_computation=False,
                                          func_args=args, func_kwargs=kwargs,
