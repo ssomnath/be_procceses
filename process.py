@@ -29,7 +29,8 @@ class Process(object):
     only need to specify application-relevant code for processing the data.
     """
 
-    def __init__(self, h5_main, cores=None, max_mem_mb=4*1024, verbose=False):
+    def __init__(self, h5_main, cores=None, max_mem_mb=4*1024,
+                 mem_multiplier=1, verbose=False):
         """
         Parameters
         ----------
@@ -39,6 +40,16 @@ class Process(object):
             How many cores to use for the computation. Default: all available cores - 2 if operating outside MPI context
         max_mem_mb : uint, optional
             How much memory to use for the computation.  Default 1024 Mb
+        mem_multiplier : float, optional. Default = 1
+            mem_multiplier is the number that will be multiplied with the
+            (byte) size of a single position in the source dataset in order to
+            better estimate the number of positions that can be processed at
+            any given time (how many pixels of the source and results datasets
+            can be retained in memory). The default value of 1.0 only accounts
+            for the source dataset. A value greater than 1 would account for
+            the size of results datasets as well. For example, if the result
+            dataset is the same size and precision as the source dataset,
+            the multiplier will be 2 (1 for source, 1 for result)
         verbose : bool, Optional, default = False
             Whether or not to print debugging statements
         """
@@ -118,7 +129,8 @@ class Process(object):
 
         # Determining the max size of the data that can be put into memory
         # all ranks go through this and they need to have this value any
-        self._set_memory_and_cores(cores=cores, man_mem_limit=max_mem_mb)
+        self._set_memory_and_cores(cores=cores, man_mem_limit=max_mem_mb,
+                                   mem_multiplier=mem_multiplier)
         self.duplicate_h5_groups = []
         self.partial_h5_groups = []
         self.process_name = None  # Reset this in the extended classes
@@ -364,19 +376,17 @@ class Process(object):
 
         self.h5_results_grp = h5_partial_group
 
-    # TODO: Break into 2 separate and smaller functions
-    def _set_memory_and_cores(self, cores=None, man_mem_limit=None):
+    def __set_cores(self, cores=None):
         """
-        Checks hardware limitations such as memory, number of CPU cores and sets the recommended data chunk sizes and
-        the number of cores to be used by analysis methods. This function can work with clusters with heterogeneous
-        memory sizes (e.g. CADES SHPC Condo).
+        Checks number of CPU cores and sets the recommended number of cores to
+        be used by analysis methods.
+        This function can work with clusters with heterogeneous core counts
+        (e.g. CADES SHPC Condo).
 
         Parameters
         ----------
-        cores : uint, optional, Default = 1
-            How many cores to use for the computation.
-        man_mem_limit : uint, optional, Default = None (all available memory)
-            The amount a memory in Mb to use in the computation
+        cores : uint, optional, Default = None (all or nearly all available)
+            How many CPU cores to use for the computation.
         """
         if self.mpi_comm is None:
             min_free_cores = 1 + int(psutil.cpu_count() > 4)
@@ -404,6 +414,63 @@ class Process(object):
             self._cores = 1
             # Disabling the following line since mpi4py and joblib didn't play well for Bayesian Inference
             # self._cores = self.__cores_per_rank = psutil.cpu_count() // self.__ranks_on_socket
+
+    def _set_memory_and_cores(self, cores=None, man_mem_limit=None,
+                              mem_multiplier=1):
+        """
+        Checks hardware limitations such as memory, number of CPU cores and sets the recommended data chunk sizes and
+        the number of cores to be used by analysis methods. This function can work with clusters with heterogeneous
+        memory sizes (e.g. CADES SHPC Condo).
+
+        Parameters
+        ----------
+        cores : uint, optional, Default = 1
+            How many cores to use for the computation.
+        man_mem_limit : uint, optional, Default = None (all available memory)
+            The amount a memory in Mb to use in the computation
+        mem_multiplier : float, optional. Default = 1
+            mem_multiplier is the number that will be multiplied with the
+            (byte) size of a single position in the source dataset in order to
+            better estimate the number of positions that can be processed at
+            any given time (how many pixels of the source and results datasets
+            can be retained in memory). The default value of 1.0 only accounts
+            for the source dataset. A value greater than 1 would account for
+            the size of results datasets as well. For example, if the result
+            dataset is the same size and precision as the source dataset,
+            the multiplier will be 2 (1 for source, 1 for result)
+        """
+        self.__set_cores(cores=cores)
+
+        self.__set_memory(man_mem_limit=man_mem_limit,
+                          mem_multiplier=mem_multiplier)
+
+    def __set_memory(self, man_mem_limit=None, mem_multiplier=1):
+        """
+        Checks memory capabilities of each node and sets the recommended data
+        chunk sizes to be used by analysis methods.
+        This function can work with clusters with heterogeneous memory sizes
+        (e.g. CADES SHPC Condo).
+
+        Parameters
+        ----------
+        man_mem_limit : uint, optional, Default = None (all available memory)
+            The amount a memory in Mb to use in the computation
+        mem_multiplier : float, optional. Default = 1
+            mem_multiplier is the number that will be multiplied with the
+            (byte) size of a single position in the source dataset in order to
+            better estimate the number of positions that can be processed at
+            any given time (how many pixels of the source and results datasets
+            can be retained in memory). The default value of 1.0 only accounts
+            for the source dataset. A value greater than 1 would account for
+            the size of results datasets as well. For example, if the result
+            dataset is the same size and precision as the source dataset,
+            the multiplier will be 2 (1 for source, 1 for result)
+        """
+        if not isinstance(mem_multiplier, float):
+            raise TypeError('mem_multiplier must be a floating point number')
+        mem_multiplier = abs(mem_multiplier)
+        if mem_multiplier < 1:
+            raise ValueError('mem_multiplier must be at least 1')
 
         avail_mem_bytes = get_available_memory()  # in bytes
         if self.verbose and self.mpi_rank == self.__socket_master_rank:
@@ -440,20 +507,27 @@ class Process(object):
 
         # Now calculate the number of positions OF RAW DATA ONLY that can be
         # stored in memory in one go PER worker
-        # TODO: Allow child process to specify a multiplier that accounts for results etc.
-        bytes_per_pos = self.h5_main.dtype.itemsize * self.h5_main.shape[1]
-        self.__bytes_per_pos = bytes_per_pos
+        self.__bytes_per_pos = self.h5_main.dtype.itemsize * self.h5_main.shape[1]
         if self.verbose and self.mpi_rank == 0:
             print('Each position in the SOURCE dataset is {} large'
-                  '.'.format(format_size(bytes_per_pos)))
+                  '.'.format(format_size(self.__bytes_per_pos)))
+        # Now multiply this with a factor that takes into account the expected
+        # sizes of the results (Final and intermediate) datasets.
+        self.__bytes_per_pos *= mem_multiplier
+        if self.verbose and self.mpi_rank == 0 and mem_multiplier > 1:
+            print('Each position of the source and results dataset(s) is {} '
+                  'large.'.format(format_size(self.__bytes_per_pos)))
 
-        self._max_pos_per_read = int(np.floor(max_mem_per_worker / bytes_per_pos))
+        self._max_pos_per_read = int(np.floor(max_mem_per_worker / self.__bytes_per_pos))
 
         if self.verbose and self.mpi_rank == self.__socket_master_rank:
+            title = 'SOURCE dataset only'
+            if mem_multiplier > 1:
+                title = 'source and result(s) datasets'
             # expected to be the same for all ranks so just use this.
             print('Rank {}: Workers on this socket allowed to read {} '
-                  'positions of the SOURCE dataset per chunk'
-                  '.'.format(self.mpi_rank, self._max_pos_per_read))
+                  'positions of the {} per chunk'
+                  '.'.format(self.mpi_rank, title, self._max_pos_per_read))
 
     @staticmethod
     def _map_function(*args, **kwargs):
