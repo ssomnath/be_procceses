@@ -3,7 +3,9 @@ import sys
 from warnings import warn
 
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
-from pyUSID import USIDataset, Process
+from pyUSID import USIDataset
+# Until I figure out what in the Process class is killing things....
+from process import Process
 
 
 class Fitter(Process):
