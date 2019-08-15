@@ -1,6 +1,9 @@
 import numpy as np
 import sys
 from warnings import warn
+import joblib
+from pyUSID.processing.comp_utils import recommend_cpu_cores
+from scipy.optimize import least_squares
 
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
 
@@ -268,3 +271,46 @@ class Fitter(Process):
 
         # We want compute to call our own manual unit computation function:
         self._unit_computation = self._unit_compute_fit
+
+    def _unit_compute_fit(self, obj_func, obj_func_args=[],
+                          solver_options={'jac': 'cs'}):
+
+        # At this point data has been read in. Read in the guess as well:
+        self._read_guess_chunk()
+
+        if self.verbose and self.mpi_rank == 0:
+            print('_unit_compute_fit got:\nobj_func: {}\nobj_func_args: {}\n'
+                  'solver_options: {}'.format(obj_func, obj_func_args, solver_options))
+
+        # TODO: Generalize this bit. Use Parallel compute instead!
+
+        if self.mpi_size > 1:
+            if self.verbose:
+                print('Rank {}: About to start serial computation'
+                      '.'.format(self.mpi_rank))
+
+            self._results = list()
+            for pulse_resp, pulse_guess in zip(self.data, self.guess):
+                curr_results = least_squares(obj_func, pulse_guess,
+                                             args=[pulse_resp] + obj_func_args,
+                                             **solver_options)
+                self._results.append(curr_results)
+        else:
+            cores = recommend_cpu_cores(self.data.shape[0],
+                                        verbose=self.verbose)
+            if self.verbose:
+                print('Starting parallel fitting with {} cores'.format(cores))
+
+            values = [joblib.delayed(least_squares)(obj_func, pulse_guess,
+                                                    args=[pulse_resp] + obj_func_args,
+                                                    **solver_options) for
+                      pulse_resp, pulse_guess in zip(self.data, self.guess)]
+            self._results = joblib.Parallel(n_jobs=cores)(values)
+
+        if self.verbose and self.mpi_rank == 0:
+            print(
+                'Finished computing fits on {} objects. Results of length: {}'
+                '.'.format(self.data.shape[0], len(self._results)))
+
+        # What least_squares returns is an object that needs to be extracted
+        # to get the coefficients. This is handled by the write function

@@ -268,35 +268,11 @@ class BESHOfitter(Fitter):
                                             h5_guess=h5_guess)
            
     def _unit_compute_fit(self, *args, **kwargs):
-        # At this point data has been read in. Read in the guess as well:
-        self._read_guess_chunk()
-        # TODO: Generalize this bit. Use Parallel compute instead!
-        solver_options={'jac': 'cs'}
 
-        if self.mpi_size > 1:
-            if self.verbose:
-                print('Rank {}: About to start serial computation'
-                      '.'.format(self.mpi_rank))
+        super(BESHOfitter, self)._unit_compute_fit(sho_error,
+                                                   obj_func_args=[self.freq_vec],
+                                                   solver_options={'jac': 'cs'})
 
-            self._results = list()
-            for pulse_resp, guess_parms in zip(self.data, self.guess):
-                curr_results = least_squares(sho_error, guess_parms,
-                                             args=(pulse_resp, self.freq_vec),
-                                             **solver_options)
-                self._results.append(curr_results)
-        else:
-            # Call joblib directly now and then parallel compute later on:
-            values = [joblib.delayed(least_squares)(sho_error, pix_guess, args=[pulse_resp, self.freq_vec],
-                                             **solver_options) for pulse_resp, pix_guess in zip(self.data, self.guess)]
-            cores = recommend_cpu_cores(self.data.shape[0], verbose=self.verbose)
-            self._results = joblib.Parallel(n_jobs=cores)(values)
-        
-        if self.verbose and self.mpi_rank == 0:
-            print('Finished computing fits on {} spectras. Results currently of length: {}'.format(self.data.shape[0], len(self._results)))
-                  
-        # What least_squares returns is an object that needs to be extracted
-        # to get the coefficients. This is handled by the write function
-        
     def _reformat_results(self, results, strategy='wavelet_peaks'):
         """
         Model specific calculation and or reformatting of the raw guess or fit results
