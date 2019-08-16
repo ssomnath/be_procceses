@@ -1,0 +1,36 @@
+/lustre/or-hydra/cades-ccsd/syz/pycroscopy_ensemble/be_sho/code
+--------------------------------------------------------------------------
+An MPI process has executed an operation involving a call to the
+"fork()" system call to create a child process.  Open MPI is currently
+operating in a condition that could result in memory corruption or
+other system errors; your MPI job may hang, crash, or produce silent
+data corruption.  The use of fork() (or system() or other calls that
+create child processes) is strongly discouraged.  
+
+The process that invoked fork was:
+
+  Local host:          or-condo-c247 (PID 104350)
+  MPI_COMM_WORLD rank: 14
+
+If you are *absolutely sure* that your application will successfully
+and correctly survive a call to fork(), you may disable this warning
+by setting the mpi_warn_on_fork MCA parameter to 0.
+--------------------------------------------------------------------------
+*** Master script called using mpirun ***
+Working on 108 ranks via MPI
+Consider calling test() to check results before calling compute() which computes on the entire dataset and writes back to the HDF5 file
+*** Instantiated the fitter ***
+*** Finished set up of guess ***
+Rank 0 - 100% complete. Time remaining: 0.0 msec
+Finished processing the entire dataset!
+*** Guess completed in 4.64 mins ***
+Group: <HDF5 group "/Measurement_000/Channel_000/Raw_Data-SHO_Fit_000" (3 members)> had neither the status HDF5 dataset or the legacy attribute: "last_pixel".
+
+Note: SHO_Fit has already been performed with the same parameters before. These results will be returned by compute() by default. Set override to True to force fresh computation
+
+[<HDF5 group "/Measurement_000/Channel_000/Raw_Data-SHO_Fit_001" (4 members)>]
+*** Finished set up of fit ***
+Resuming computation. 0% completed already
+Rank 0 - 100% complete. Time remaining: 0.0 msec
+Finished processing the entire dataset!
+*** Fit completed in 1.83 mins ***
