@@ -203,7 +203,7 @@ class BESHOfitter(Fitter):
         Should Guess be its own Process class in that case? If so, it would end up having 
         its own group etc.
         
-        Move generic code to Fitter
+        TODO: Move generic code to Fitter once LoopFit is completed as a second example
         """
         self.parms_dict = {'guess-method': "pycroscopy BESHO"}
         
