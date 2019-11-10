@@ -10,10 +10,11 @@ from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_res
                                 create_empty_dataset, write_main_dataset, get_attr, get_unit_values, reshape_to_n_dims, get_sort_order
 from pyUSID.io.usi_data import USIDataset
 from pyUSID.processing.process import Process
-from pyUSID.processing.comp_utils import recommend_cpu_cores
+from pyUSID.processing.comp_utils import get_MPI
 
 # From this project:
 from be_sho_fitter import sho32
+from be_loop import projectLoop
 from fitter import Fitter
 
 
@@ -298,44 +299,110 @@ class BELoopProjector(Process):
         """
         pass
 
-    def _unit_computation(self, *args, **kwargs):
+    def _unit_computation(self):
         if self.verbose and self.mpi_rank == 0:
-            print("Rank {} at Process class' default _unit_computation() that "
+            print("Rank {} at _unit_computation() that "
                   "will call parallel_compute()".format(self.mpi_rank))
 
-        req_cores = cores
+        # resp_2d, dc_vec = self.data
+
+        req_cores = self._cores
         MPI = get_MPI()
         if MPI is not None:
             rank = MPI.COMM_WORLD.Get_rank()
-            # Was unable to get the MPI + joblib framework to work. Did not compute anything at all. Just froze
             cores = 1
         else:
             rank = 0
-            cores = recommend_cpu_cores(data.shape[0],
-                                        requested_cores=cores,
-                                        lengthy_computation=lengthy_computation,
-                                        verbose=verbose)
+            cores = self._cores
 
-        if verbose:
+        if self.verbose:
             print(
                 'Rank {} starting computing on {} cores (requested {} cores)'.format(
                     rank, cores, req_cores))
 
         if cores > 1:
-            values = [joblib.delayed(func)(x, *func_args, **func_kwargs) for x
-                      in data]
+            values = []
+            for loops_2d, curr_vdc in self.data:
+                values += [joblib.delayed(self._map_function)(x, [curr_vdc]) for x
+                          in loops_2d]
             results = joblib.Parallel(n_jobs=cores)(values)
 
             # Finished reading the entire data set
             print('Rank {} finished parallel computation'.format(rank))
 
         else:
-            if verbose:
+            if self.verbose:
                 print("Rank {} computing serially ...".format(rank))
             # List comprehension vs map vs for loop?
             # https://stackoverflow.com/questions/1247486/python-list-comprehension-vs-map
-            results = [func(vector, *func_args, **func_kwargs) for vector in
-                       data]
+            results = []
+            for loops_2d, curr_vdc in self.data:
+                results += [self._map_function(vector, curr_vdc) for vector in
+                            loops_2d]
 
-        return results
-    
+        self._results = results
+
+    def compute(self, override=False):
+        return super(BELoopProjector, self).compute(self, override=override)
+
+    project_loops = compute
+
+    @staticmethod
+    def _map_function(sho_response, dc_offset):
+        # projected_loop = np.zeros(shape=sho_response.shape, dtype=np.float32)
+        ancillary = np.zeros(shape=1, dtype=loop_metrics32)
+
+        pix_dict = projectLoop(np.squeeze(dc_offset),
+                               sho_response['Amplitude [V]'],
+                               sho_response['Phase [rad]'])
+
+        projected_loop = pix_dict['Projected Loop']
+        ancillary['Rotation Angle [rad]'] = pix_dict['Rotation Matrix'][0]
+        ancillary['Offset'] = pix_dict['Rotation Matrix'][1]
+        ancillary['Area'] = pix_dict['Geometric Area']
+        ancillary['Centroid x'] = pix_dict['Centroid'][0]
+        ancillary['Centroid y'] = pix_dict['Centroid'][1]
+
+        return projected_loop, ancillary
+
+    def _write_results_chunk(self):
+
+        """
+        self._results is now a zipped tuple containing:
+        1. a projected loop (an array of float32) and
+        2. a single compound element for hte loop metrics
+
+        Step 1 will be to unzip the two components into separate arrays
+        Step 2 will fold back the flattened 1 / 2D array into the N-dim form
+        Step 3 will reverse all transposes
+        Step 4 will flatten back to its original 2D form
+        Step 5 will finally write the data to an HDF5 file
+        """
+
+        # Step 1: unzip the two components in results into separate arrays
+        loop_mets = np.zeros(shape=len(self._results), dtype=loop_metrics32)
+        proj_loops = np.zeros(shape=(len(self._results),
+                                     self.dc_offsets_mat.shape[1]),
+                              dtype=np.float32)
+        ind = 0
+        for curr_loop, curr_met in self._results:
+            proj_loops[ind] = curr_loop
+            loop_mets[ind] = curr_met
+            ind += 1
+
+        if self.verbose:
+            print('Unzipped results into Projected loops of shape: {} and '
+                  'Metrics of shape: {}'.format(proj_loops.shape,
+                                                loop_mets.shape))
+
+        # Step 2: Fold to N-D before reversing transposes:
+
+
+        # Which pixels are we working on?
+        curr_pixels = self._get_pixels_in_current_batch()
+
+        self.h5_projected_loops[curr_pixels] = projected_loops_2d2
+        self.h5_loop_metrics[curr_pixels] = metrics_2d
+
+        if self.verbose and self.mpi_rank == 0:
+            print('Finished ?')
