@@ -20,7 +20,7 @@ class Fitter(Process):
         # Validate other arguments / kwargs here:
         if variables is not None:
             if not np.all(np.isin(variables, self.h5_main.spec_dim_labels)):
-                raise ValueError('Provided dataset does not appear to have the spectroscopic dimension(s) that need to be fitted')
+                raise ValueError('Provided dataset does not appear to have the spectroscopic dimension(s): "{}" that need to be fitted'.format(variables))
 
         self.process_name = None
                 
