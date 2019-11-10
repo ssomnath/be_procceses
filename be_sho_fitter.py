@@ -7,7 +7,7 @@ from functools import partial
 from scipy.optimize import least_squares
 
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
-from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_spec_dsets, \
+from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_anc_dsets, \
                                 create_empty_dataset, write_main_dataset
 from pyUSID.processing.comp_utils import recommend_cpu_cores
 
@@ -86,7 +86,7 @@ class BESHOfitter(Fitter):
         self.h5_results_grp = create_results_group(self.h5_main, self.process_name)
         write_simple_attrs(self.h5_results_grp, self.parms_dict)
 
-        h5_sho_inds, h5_sho_vals = write_reduced_spec_dsets(self.h5_results_grp, self.h5_main.h5_spec_inds,
+        h5_sho_inds, h5_sho_vals = write_reduced_anc_dsets(self.h5_results_grp, self.h5_main.h5_spec_inds,
                                                             self.h5_main.h5_spec_vals, self._fit_dim_name)
 
         self.h5_guess = write_main_dataset(self.h5_results_grp, (self.h5_main.shape[0], self.num_udvs_steps), 'Guess', 'SHO',
