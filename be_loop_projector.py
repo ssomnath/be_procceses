@@ -78,7 +78,8 @@ class BELoopProjector(Process):
         self.parms_dict = {'projection_method': 'pycroscopy BE loop model'}
 
         # Now Extract some basic parameters that are necessary for either the guess or fit
-        self.dc_offsets_mat = self._get_dc_offsets()
+        self.dc_offsets_mat = self._get_dc_offsets(self.h5_main.h5_spec_inds,
+                                                   self.h5_main.h5_spec_vals)
 
     def _create_projection_datasets(self):
         """
@@ -167,22 +168,42 @@ class BELoopProjector(Process):
                   '.'.format(len(self.data[0]), self.data[0][0].shape))
 
     @staticmethod
-    def _get_dc_offsets(h5_spec_inds, h5_spec_vals):
+    def _get_dc_offsets(h5_spec_inds, h5_spec_vals, verbose=False):
         # FORC is the decider whether or not DC_Offset changes.
         # FORC_Repeats etc. should not matter
         spec_unit_vals = get_unit_values(h5_spec_inds,
-                                         h5_spec_vals)
+                                         h5_spec_vals,
+                                         verbose=verbose)
         if 'FORC' not in spec_unit_vals.keys():
+            if verbose:
+                print(
+                    'This is not a FORC dataset. Just taking unit values for DC Offset')
             dc_val_mat = np.expand_dims(spec_unit_vals['DC_Offset'], axis=0)
         else:
             # Reshape the Spec values matrix into an N dimensional array
-            spec_vals_nd, success, spec_nd_labels = reshape_to_n_dims(
-                h5_spec_vals,
-                np.expand_dims(np.arange(h5_spec_vals.shape[0]),
-                               axis=1),
-                h5_spec_inds, get_labels=True)
+            if verbose:
+                print(
+                    'This is a FORC dataset. Reshaping Spectroscopic Values to N dimensions')
+            ret_vals = reshape_to_n_dims(h5_spec_vals,
+                                         np.expand_dims(
+                                             np.arange(h5_spec_vals.shape[0]),
+                                             axis=1),
+                                         h5_spec_inds, get_labels=True)
+            spec_vals_nd, success, spec_nd_labels = ret_vals
+
+            if success != True:
+                raise ValueError(
+                    'Unable to reshape Spectroscopic values to get DC offsets for each FORC')
+
             # We will be using "in" quite a bit. So convert to list
             spec_nd_labels = list(spec_nd_labels)
+
+            if verbose:
+                print('Reshaped Spectroscopic Values to: {}'.format(
+                    spec_vals_nd.shape))
+                print(
+                    'Spectroscopic dimension names: {}'.format(spec_nd_labels))
+
             # Note the indices of all other dimensions
             all_other_dims = set(range(len(spec_nd_labels))) - \
                              set([spec_nd_labels.index('DC_Offset'),
@@ -192,9 +213,17 @@ class BELoopProjector(Process):
             new_order = [spec_nd_labels.index('FORC'),
                          spec_nd_labels.index('DC_Offset')] + list(
                 all_other_dims)
+            if verbose:
+                print('Will transpose this N-dim matrix as: {}'.format(
+                    new_order))
+
             # Apply this new order to the matrix and the labels
             spec_vals_nd = spec_vals_nd.transpose(new_order)
-            # spec_nd_labels = np.array(spec_nd_labels)[new_order]
+            spec_nd_labels = np.array(spec_nd_labels)[new_order]
+            if verbose:
+                print('After transpose shape and names:\n\t{}\n\t{}'.format(
+                    spec_vals_nd.shape, spec_nd_labels))
+
             # Now remove all other dimensions using a list of slices:
             keep_list = [slice(None), slice(None)] + [slice(0, 1) for _ in
                                                       range(
@@ -202,29 +231,55 @@ class BELoopProjector(Process):
             # Don't forget to remove singular dimensions using squeeze
             dc_val_mat = spec_vals_nd[keep_list].squeeze()
             # Unnecessary but let's keep track of dimension names anyway
-            # spec_nd_labels = spec_nd_labels[:2]
+            spec_nd_labels = spec_nd_labels[:2]
+            if verbose:
+                print(
+                    'After removing all other dimensions. Shape is: {} and dimensions are: {}'.format(
+                        dc_val_mat.shape, spec_nd_labels))
+
         return dc_val_mat
 
     @staticmethod
     def reshape_sho_chunk_to_nd(data_2d, raw_dim_labels,
-                                h5_pos_inds, h5_spec_inds):
+                                h5_pos_inds, h5_spec_inds,
+                                verbose=False):
 
         ret_vals = reshape_to_n_dims(data_2d, h5_pos_inds[:data_2d.shape[0]],
                                      h5_spec_inds)
         data_nd_auto, success = ret_vals
-        
+
+        if success != True:
+            raise ValueError(
+                'Unable to reshape data chunk of shape {} to N dimensions'.format(
+                    data_2d.shape))
+
+        if verbose:
+            print('Reshaped raw data from: {} to {}'.format(data_2d.shape,
+                                                            data_nd_auto.shape))
+
         # By default it is fast to slow!
         pos_sort = get_sort_order(h5_pos_inds)[::-1]
         spec_sort = get_sort_order(h5_spec_inds)[::-1]
-        
         swap_order = list(pos_sort) + list(len(pos_sort) + spec_sort)
+
+        if verbose:
+            print(
+                'Dimensions will be permuted as {} to arrange them from slowest to fastest'.format(
+                    swap_order))
+
         data_nd_s2f = data_nd_auto.transpose(swap_order)
-        dim_labels_s2f = list(raw_dim_labels[list(swap_order)])
+        dim_labels_s2f = np.array(raw_dim_labels)[swap_order]
+
+        if verbose:
+            print(
+                'After rearranging array is of shape: {}, dimensions are ordered as: {}'.format(
+                    data_nd_s2f.shape, dim_labels_s2f))
 
         return data_nd_s2f, dim_labels_s2f
 
     @staticmethod
-    def break_nd_by_forc(data_nd_s2f, dim_labels_s2f, num_forcs):
+    def break_nd_by_forc(data_nd_s2f, dim_labels_s2f, num_forcs,
+                         verbose=False):
 
         if num_forcs > 1:
             # Fundamental assumption: FORC will always be the slowest dimension
@@ -234,45 +289,80 @@ class BELoopProjector(Process):
             forc_less_labels_s2f = dim_labels_s2f[
                                    :forc_dim_ind] + dim_labels_s2f[
                                                     forc_dim_ind + 1:]
+            if verbose:
+                print(
+                    '"FORC" was found at index: {} in the dimension labels (slow>>fast): {}'.format(
+                        forc_dim_ind, dim_labels_s2f))
+                print('Dimensions after removing FORC: {}'.format(
+                    forc_less_labels_s2f))
+
             single_forc_indices = [slice(None) for _ in
                                    range(len(dim_labels_s2f))]
             forc_dsets = []
+            switch = True
             for forc_ind in range(num_forcs):
                 single_forc_indices[forc_dim_ind] = slice(forc_ind,
                                                           forc_ind + 1)
                 temp = data_nd_s2f[single_forc_indices].squeeze()
-                print(single_forc_indices)
-                print(temp.shape)
+                if verbose and switch:
+                    print(
+                        'Slice list used to slice index: {} of FORC: {}'.format(
+                            forc_ind, single_forc_indices))
+                    print('Shape of matrix after slicing FORC: {}'.format(
+                        temp.shape))
+                    switch = False
+
                 forc_dsets.append(temp)
         else:
             forc_dsets = [data_nd_s2f]
             forc_less_labels_s2f = dim_labels_s2f
 
-        return forc_dsets, forc_less_labels_s2f
+        return forc_dsets, list(forc_less_labels_s2f)
 
     @staticmethod
-    def get_forc_pairs(forc_dsets, forc_less_labels_s2f, dc_val_mat):
+    def get_forc_pairs(forc_dsets, forc_less_labels_s2f, dc_val_mat,
+                       verbose=False):
 
         dc_vec = []
         resp_2d = []
 
+        switch = True
         for dc_offsets, forc_less_mat_nd in zip(dc_val_mat, forc_dsets):
             if len(forc_less_labels_s2f) != forc_less_mat_nd.ndim:
                 raise ValueError('Length of labels: {} does not match with '
                                  'number of dimensions of dataset: {}'
                                  '.'.format(len(forc_less_labels_s2f),
                                             forc_less_mat_nd.ndim))
+
             dc_dim_ind = forc_less_labels_s2f.index('DC_Offset')
+            if verbose and switch:
+                print(
+                    '"DC_Offset" found at index: {} in list of dimensions: {}'.format(
+                        dc_dim_ind, forc_less_labels_s2f))
+
             slower_than_dc_dim_inds = list(range(dc_dim_ind))
             faster_than_dc_dim_inds = list(
                 range(dc_dim_ind + 1, len(forc_less_labels_s2f)))
             trans_order = slower_than_dc_dim_inds + faster_than_dc_dim_inds + [
                 dc_dim_ind]
+            if verbose and switch:
+                print(
+                    'Transposing the data matrix as: {} to get "DC_Offset" as last dimension'.format(
+                        trans_order))
+
             shifted_matrix = forc_less_mat_nd.transpose(trans_order)
-            print(trans_order, np.array(forc_less_labels_s2f)[trans_order],
-                  shifted_matrix.shape)
+            if verbose and switch:
+                print(
+                    'Shape of permuted array: {} with dimension names: {}'.format(
+                        shifted_matrix.shape,
+                        np.array(forc_less_labels_s2f)[trans_order]))
+
             all_x_vdc = shifted_matrix.reshape(-1, shifted_matrix.shape[-1])
-            print(all_x_vdc.shape)
+            if verbose and switch:
+                print('Shape of 2D array after flattening: {}'.format(
+                    all_x_vdc.shape))
+                switch = False
+
             dc_vec.append(dc_offsets)
             resp_2d.append(all_x_vdc)
 
@@ -283,14 +373,16 @@ class BELoopProjector(Process):
         data_nd_s2f, dim_labels_s2f = self.reshape_sho_chunk_to_nd(data_2d,
                                                                    self.h5_main.n_dim_labels,
                                                                    self.h5_main.h5_pos_inds,
-                                                                   self.h5_main.h5_spec_inds)
+                                                                   self.h5_main.h5_spec_inds,
+                                                                   verbose=self.verbose)
 
         forc_dsets, forc_less_labels_s2f = self.break_nd_by_forc(data_nd_s2f,
-                                                                 dim_labels_s2f,
-                                                                 self.dc_offsets_mat.shape[0])
+                                                                 list(dim_labels_s2f),
+                                                                 self.dc_offsets_mat.shape[0],
+                                                                 verbose=self.verbose)
 
         return self.get_forc_pairs(forc_dsets, forc_less_labels_s2f,
-                                   self.dc_offsets_mat)
+                                   self.dc_offsets_mat, verbose=self.verbose)
 
     def _write_results_chunk(self):
         """
