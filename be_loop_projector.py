@@ -81,7 +81,7 @@ class BELoopProjector(Process):
         self.dc_offsets_mat = self._get_dc_offsets(self.h5_main.h5_spec_inds,
                                                    self.h5_main.h5_spec_vals)
 
-    def _create_projection_datasets(self):
+    def _create_results_datasets(self):
         """
         Setup the Loop_Fit Group and the loop projection datasets
 
@@ -384,19 +384,11 @@ class BELoopProjector(Process):
         return self.get_forc_pairs(forc_dsets, forc_less_labels_s2f,
                                    self.dc_offsets_mat, verbose=self.verbose)
 
-    def _write_results_chunk(self):
-        """
-        Writes the provided chunk of data into the guess or fit datasets. 
-        This method is responsible for any and all book-keeping.
-        """
-        pass
-
     def _unit_computation(self):
         if self.verbose and self.mpi_rank == 0:
-            print("Rank {} at _unit_computation() that "
-                  "will call parallel_compute()".format(self.mpi_rank))
+            print("Rank {} at custom _unit_computation".format(self.mpi_rank))
 
-        # resp_2d, dc_vec = self.data
+        resp_2d_list, dc_vec_list = self.data
 
         req_cores = self._cores
         MPI = get_MPI()
@@ -414,7 +406,7 @@ class BELoopProjector(Process):
 
         if cores > 1:
             values = []
-            for loops_2d, curr_vdc in self.data:
+            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
                 values += [joblib.delayed(self._map_function)(x, [curr_vdc]) for x
                           in loops_2d]
             results = joblib.Parallel(n_jobs=cores)(values)
@@ -428,14 +420,14 @@ class BELoopProjector(Process):
             # List comprehension vs map vs for loop?
             # https://stackoverflow.com/questions/1247486/python-list-comprehension-vs-map
             results = []
-            for loops_2d, curr_vdc in self.data:
+            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
                 results += [self._map_function(vector, curr_vdc) for vector in
                             loops_2d]
 
         self._results = results
 
     def compute(self, override=False):
-        return super(BELoopProjector, self).compute(self, override=override)
+        return super(BELoopProjector, self).compute(override=override)
 
     project_loops = compute
 
@@ -476,25 +468,28 @@ class BELoopProjector(Process):
         proj_loops = np.zeros(shape=(len(self._results),
                                      self.dc_offsets_mat.shape[1]),
                               dtype=np.float32)
-        ind = 0
-        for curr_loop, curr_met in self._results:
-            proj_loops[ind] = curr_loop
-            loop_mets[ind] = curr_met
-            ind += 1
 
         if self.verbose:
-            print('Unzipped results into Projected loops of shape: {} and '
-                  'Metrics of shape: {}'.format(proj_loops.shape,
-                                                loop_mets.shape))
+            print('Prepared empty arrays for loop metrics of shape: {} and '
+                  'projected loops of shape: {}.'
+                  ''.format(loop_mets.shape, proj_loops.shape))
+
+        for ind in range(len(self._results)):
+            proj_loops[ind] = self._results[ind][0]
+            loop_mets[ind] = self._results[ind][1]
+
+        if self.verbose:
+            print('Unzipped results into Projected loops and Metrics arrays')
 
         # Step 2: Fold to N-D before reversing transposes:
 
 
         # Which pixels are we working on?
         curr_pixels = self._get_pixels_in_current_batch()
-
+        """
         self.h5_projected_loops[curr_pixels] = projected_loops_2d2
         self.h5_loop_metrics[curr_pixels] = metrics_2d
 
         if self.verbose and self.mpi_rank == 0:
             print('Finished ?')
+        """
