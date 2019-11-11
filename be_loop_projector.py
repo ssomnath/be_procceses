@@ -1,10 +1,5 @@
-import sys
-from enum import Enum
-from warnings import warn
 import numpy as np
 import joblib
-from functools import partial
-from scipy.optimize import least_squares
 
 from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_anc_dsets, \
                                 create_empty_dataset, write_main_dataset, get_attr, get_unit_values, reshape_to_n_dims, get_sort_order
@@ -15,15 +10,15 @@ from pyUSID.processing.comp_utils import get_MPI
 # From this project:
 from be_sho_fitter import sho32
 from be_loop import projectLoop
-from fitter import Fitter
-
 
 '''
 Custom dtype for the datasets created during fitting.
 '''
 
-loop_metrics32 = np.dtype({'names': ['Area', 'Centroid x', 'Centroid y', 'Rotation Angle [rad]', 'Offset'],
-                           'formats': [np.float32, np.float32, np.float32, np.float32, np.float32]})
+loop_metrics32 = np.dtype({'names': ['Area', 'Centroid x', 'Centroid y',
+                                     'Rotation Angle [rad]', 'Offset'],
+                           'formats': [np.float32, np.float32, np.float32,
+                                       np.float32, np.float32]})
 
 
 class BELoopProjector(Process):
@@ -45,8 +40,8 @@ class BELoopProjector(Process):
         if h5_main.dtype != sho32:
             raise TypeError('Provided dataset is not a SHO results dataset.')
 
-        # This check is clunky but should account for case differences.  If Python2 support is dropped, simplify with
-        # single check using casefold.
+        # This check is clunky but should account for case differences.
+        # If Python2 support is dropped, simplify with# single check using case
         if not (
                 meas_data_type.lower != file_data_type.lower or meas_data_type.upper != file_data_type.upper):
             message = 'Mismatch between file and Measurement group data types for the chosen dataset.\n'
@@ -124,8 +119,8 @@ class BELoopProjector(Process):
                                                   h5_spec_vals=h5_loop_met_spec_vals)
 
         # Copy region reference:
-        copy_region_refs(self.h5_main, self.h5_projected_loops)
-        copy_region_refs(self.h5_main, self.h5_loop_metrics)
+        # copy_region_refs(self.h5_main, self.h5_projected_loops)
+        # copy_region_refs(self.h5_main, self.h5_loop_metrics)
 
         self.h5_main.file.flush()
         self._met_spec_inds = self.h5_loop_metrics.h5_spec_inds
@@ -173,7 +168,7 @@ class BELoopProjector(Process):
         # FORC_Repeats etc. should not matter
         spec_unit_vals = get_unit_values(h5_spec_inds,
                                          h5_spec_vals,
-                                         verbose=verbose)
+                                         verbose=False)
         if 'FORC' not in spec_unit_vals.keys():
             if verbose:
                 print(
@@ -351,11 +346,12 @@ class BELoopProjector(Process):
                         trans_order))
 
             shifted_matrix = forc_less_mat_nd.transpose(trans_order)
+            shifted_labels = list(np.array(forc_less_labels_s2f)[trans_order])
+
             if verbose and switch:
                 print(
                     'Shape of permuted array: {} with dimension names: {}'.format(
-                        shifted_matrix.shape,
-                        np.array(forc_less_labels_s2f)[trans_order]))
+                        shifted_matrix.shape, shifted_labels))
 
             all_x_vdc = shifted_matrix.reshape(-1, shifted_matrix.shape[-1])
             if verbose and switch:
@@ -366,7 +362,7 @@ class BELoopProjector(Process):
             dc_vec.append(dc_offsets)
             resp_2d.append(all_x_vdc)
 
-        return resp_2d, dc_vec
+        return resp_2d, dc_vec, list(shifted_matrix.shape), shifted_labels
 
     def get_forc_pairs_from_sho_2d(self, data_2d):
 
@@ -376,13 +372,21 @@ class BELoopProjector(Process):
                                                                    self.h5_main.h5_spec_inds,
                                                                    verbose=self.verbose)
 
+        self._dim_labels_s2f = list(dim_labels_s2f)
+
         forc_dsets, forc_less_labels_s2f = self.break_nd_by_forc(data_nd_s2f,
                                                                  list(dim_labels_s2f),
                                                                  self.dc_offsets_mat.shape[0],
                                                                  verbose=self.verbose)
 
-        return self.get_forc_pairs(forc_dsets, forc_less_labels_s2f,
+        self._num_forcs = len(forc_dsets)
+
+        ret_vals = self.get_forc_pairs(forc_dsets, forc_less_labels_s2f,
                                    self.dc_offsets_mat, verbose=self.verbose)
+
+        resp_2d, dc_vec, self.pre_flattening_shape, self.pre_flattening_dim_name_order = ret_vals
+
+        return resp_2d, dc_vec
 
     def _unit_computation(self):
         if self.verbose and self.mpi_rank == 0:
@@ -449,6 +453,48 @@ class BELoopProjector(Process):
 
         return projected_loop, ancillary
 
+    @staticmethod
+    def _reformat_results_chunk(num_forcs, proj_loops, first_n_dim_shape,
+                                first_n_dim_names, dim_labels_s2f,
+                                num_pos_dims, verbose=False):
+
+        # What we need to do is put the forc back as the slowest dimension before the pre_flattening shape:
+        if num_forcs > 1:
+            first_n_dim_shape = [num_forcs] + first_n_dim_shape
+            first_n_dim_names = ['FORC'] + first_n_dim_names
+        if verbose:
+            print('Dimension sizes & order: {} and names: {} that flattened '
+                  'results will be reshaped to'
+                  '.'.format(first_n_dim_shape, first_n_dim_names))
+
+        # Now, reshape the flattened 2D results to its N-dim form before flattening (now FORC included):
+        first_n_dim_results = proj_loops.reshape(first_n_dim_shape)
+
+        # Need to put data back to slowest >> fastest dim
+        map_to_s2f = [first_n_dim_names.index(dim_name) for dim_name in
+                      dim_labels_s2f]
+        if verbose:
+            print('Will permute as: {} to arrange dimensions from slowest to '
+                  'fastest varying'.format(map_to_s2f))
+
+        results_nd_s2f = first_n_dim_results.transpose(map_to_s2f)
+
+        if verbose:
+            print('Shape: {} and dimension labels: {} of results arranged from'
+                  ' slowest to fastest varying'
+                  '.'.format(results_nd_s2f.shape, dim_labels_s2f))
+
+        pos_size = np.prod(results_nd_s2f.shape[:num_pos_dims])
+        spec_size = np.prod(results_nd_s2f.shape[num_pos_dims:])
+
+        if verbose:
+            print('Results will be flattend to: {}'
+                  '.'.format((pos_size, spec_size)))
+
+        results_2d = results_nd_s2f.reshape(pos_size, spec_size)
+
+        return results_2d
+
     def _write_results_chunk(self):
 
         """
@@ -482,14 +528,34 @@ class BELoopProjector(Process):
             print('Unzipped results into Projected loops and Metrics arrays')
 
         # Step 2: Fold to N-D before reversing transposes:
+        loops_2d = self._reformat_results_chunk(self._num_forcs, proj_loops,
+                                                self.pre_flattening_shape,
+                                                self.pre_flattening_dim_name_order,
+                                                self._dim_labels_s2f,
+                                                len(self.h5_main.pos_dim_labels),
+                                                verbose=self.verbose)
 
+        met_labels_s2f = self._dim_labels_s2f.copy()
+        met_labels_s2f.remove('DC_Offset')
+
+        mets_2d = self._reformat_results_chunk(self._num_forcs, loop_mets,
+                                                self.pre_flattening_shape[:-1],
+                                                self.pre_flattening_dim_name_order[:-1],
+                                                met_labels_s2f,
+                                                len(self.h5_main.pos_dim_labels),
+                                                verbose=self.verbose)
 
         # Which pixels are we working on?
         curr_pixels = self._get_pixels_in_current_batch()
-        """
-        self.h5_projected_loops[curr_pixels] = projected_loops_2d2
-        self.h5_loop_metrics[curr_pixels] = metrics_2d
 
+        if self.verbose:
+            print('Writing projected loops of shape: {} to {} pixels in dataset of shape: {}'.format(loops_2d.shape, len(curr_pixels), self.h5_projected_loops.shape))
+            print('Writing loop metrics of shape: {} to {} pixels in dataset of shape: {}'.format(mets_2d.shape, len(curr_pixels), self.h5_loop_metrics.shape))
+
+        self.h5_projected_loops[curr_pixels, :] = loops_2d
+        self.h5_loop_metrics[curr_pixels, :] = mets_2d
+
+        """
         if self.verbose and self.mpi_rank == 0:
             print('Finished ?')
         """
