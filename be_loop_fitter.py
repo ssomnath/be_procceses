@@ -294,6 +294,142 @@ class BELoopFitter(Fitter):
 
         return projected_loop_mat, ancillary_mat
 
+    @staticmethod
+    def _guess_loops(vdc_vec, projected_loops_2d):
+        """
+        Provides loop parameter guesses for a given set of loops
+
+        Parameters
+        ----------
+        vdc_vec : 1D numpy float numpy array
+            DC voltage offsets for the loops
+        projected_loops_2d : 2D numpy float array
+            Projected loops arranged as [instance or position x dc voltage steps]
+
+        Returns
+        -------
+        guess_parms : 1D compound numpy array
+            Loop parameter guesses for the provided projected loops
+
+        """
+
+        def _loop_fit_tree(tree, guess_mat, fit_results, vdc_shifted,
+                           shift_ind):
+            """
+            Recursive function that fits a tree object describing the cluster results
+
+            Parameters
+            ----------
+            tree : ClusterTree object
+                Tree describing the clustering results
+            guess_mat : 1D numpy float array
+                Loop parameters that serve as guesses for the loops in the tree
+            fit_results : 1D numpy float array
+                Loop parameters that serve as fits for the loops in the tree
+            vdc_shifted : 1D numpy float array
+                DC voltages shifted be 1/4 cycle
+            shift_ind : unsigned int
+                Number of units to shift loops by
+
+            Returns
+            -------
+            guess_mat : 1D numpy float array
+                Loop parameters that serve as guesses for the loops in the tree
+            fit_results : 1D numpy float array
+                Loop parameters that serve as fits for the loops in the tree
+
+            """
+            # print('Now fitting cluster #{}'.format(tree.name))
+            # I already have a guess. Now fit myself
+            curr_fit_results = fit_loop(vdc_shifted,
+                                        np.roll(tree.value, shift_ind),
+                                        guess_mat[tree.name])
+            # keep all the fit results
+            fit_results[tree.name] = curr_fit_results
+            for child in tree.children:
+                # Use my fit as a guess for the lower layers:
+                guess_mat[child.name] = curr_fit_results[0].x
+                # Fit this child:
+                guess_mat, fit_mat = _loop_fit_tree(child, guess_mat,
+                                                    fit_results, vdc_shifted,
+                                                    shift_ind)
+            return guess_mat, fit_results
+
+        num_clusters = max(2, int(projected_loops_2d.shape[
+                                      0] ** 0.5))  # change this to 0.6 if necessary
+        estimators = KMeans(num_clusters)
+        results = estimators.fit(projected_loops_2d)
+        centroids = results.cluster_centers_
+        labels = results.labels_
+
+        # Get the distance between cluster means
+        distance_mat = pdist(centroids)
+        # get hierarchical pairings of clusters
+        linkage_pairing = linkage(distance_mat, 'weighted')
+        # Normalize the pairwise distance with the maximum distance
+        linkage_pairing[:, 2] = linkage_pairing[:, 2] / max(
+            linkage_pairing[:, 2])
+
+        # Now use the tree class:
+        cluster_tree = ClusterTree(linkage_pairing[:, :2], labels,
+                                   distances=linkage_pairing[:, 2],
+                                   centroids=centroids)
+        num_nodes = len(cluster_tree.nodes)
+
+        # prepare the guess and fit matrices
+        loop_guess_mat = np.zeros(shape=(num_nodes, 9), dtype=np.float32)
+        # loop_fit_mat = np.zeros(shape=loop_guess_mat.shape, dtype=loop_guess_mat.dtype)
+        loop_fit_results = list(
+            np.arange(num_nodes, dtype=np.uint16))  # temporary placeholder
+
+        shift_ind, vdc_shifted = BELoopFitter.shift_vdc(vdc_vec)
+
+        # guess the top (or last) node
+        loop_guess_mat[-1] = generate_guess(vdc_vec, cluster_tree.tree.value)
+
+        # Now guess the rest of the tree
+        loop_guess_mat, loop_fit_results = _loop_fit_tree(cluster_tree.tree,
+                                                          loop_guess_mat,
+                                                          loop_fit_results,
+                                                          vdc_shifted,
+                                                          shift_ind)
+
+        # Prepare guesses for each pixel using the fit of the cluster it belongs to:
+        guess_parms = np.zeros(shape=projected_loops_2d.shape[0],
+                               dtype=loop_fit32)
+        for clust_id in range(num_clusters):
+            pix_inds = np.where(labels == clust_id)[0]
+            temp = np.atleast_2d(loop_fit_results[clust_id][0].x)
+            # convert to the appropriate dtype as well:
+            r2 = 1 - np.sum(np.abs(loop_fit_results[clust_id][0].fun ** 2))
+            guess_parms[pix_inds] = stack_real_to_compound(
+                np.hstack([temp, np.atleast_2d(r2)]), loop_fit32)
+
+        return guess_parms
+
+    @staticmethod
+    def shift_vdc(vdc_vec):
+        """
+        Rolls the Vdc vector by a quarter cycle
+
+        Parameters
+        ----------
+        vdc_vec : 1D numpy array
+            DC offset vector
+
+        Returns
+        -------
+        shift_ind : int
+            Number of indices by which the vector was rolled
+        vdc_shifted : 1D numpy array
+            Vdc vector rolled by a quarter cycle
+
+        """
+        shift_ind = int(
+            -1 * len(vdc_vec) / 4)  # should NOT be hardcoded like this!
+        vdc_shifted = np.roll(vdc_vec, shift_ind)
+        return shift_ind, vdc_shifted
+
     def _get_sho_chunk_sizes(self, max_mem_mb):
         """
         Calculates the largest number of positions that can be read into memory for a single FORC cycle
@@ -432,51 +568,6 @@ class BELoopFitter(Fitter):
 
         self.fit_dim_vec = np.squeeze(spec_vals_nd[tuple(fit_dim_slice)])
 
-        return
-
-    def _project_loops(self):
-        """
-        Do the projection of the SHO fit
-        """
-
-        self._create_projection_datasets()
-        self._get_sho_chunk_sizes(0.25 * get_available_memory())
-
-        '''
-        Loop over the FORCs
-        '''
-        for forc_chunk_index in range(self._num_forcs):
-            pos_chunk_index = 0
-
-            self._current_sho_spec_slice = slice(self.sho_spec_inds_per_forc * self._current_forc,
-                                                 self.sho_spec_inds_per_forc * (self._current_forc + 1))
-            self._current_met_spec_slice = slice(self.metrics_spec_inds_per_forc * self._current_forc,
-                                                 self.metrics_spec_inds_per_forc * (self._current_forc + 1))
-            dc_vec = self._get_dc_offset()
-            '''
-            Loop over positions
-            '''
-
-            self._end_pos =
-            while self._current_pos_slice.stop < self._end_pos:
-                loops_2d, nd_mat_shape_dc_first, order_dc_offset_reverse = self._get_projection_data(pos_chunk_index)
-
-                # step 8: perform loop unfolding
-                projected_loops_2d, loop_metrics_1d = self._project_loop_batch(dc_vec, np.transpose(loops_2d))
-
-                # test the reshapes back
-                projected_loops_2d = self._reshape_projected_loops_for_h5(projected_loops_2d,
-                                                                          order_dc_offset_reverse,
-                                                                          nd_mat_shape_dc_first)
-                self.h5_projected_loops[self._current_pos_slice, self._current_sho_spec_slice] = projected_loops_2d
-
-                metrics_2d = self._reshape_results_for_h5(loop_metrics_1d, nd_mat_shape_dc_first)
-
-                self.h5_loop_metrics[self._current_pos_slice, self._current_met_spec_slice] = metrics_2d
-
-            # Reset the position slice
-            self._current_pos_slice = slice(None)
-
     def _create_guess_datasets(self):
         """
         Creates the HDF5 Guess dataset and links the it to the ancillary datasets.
@@ -489,6 +580,183 @@ class BELoopFitter(Fitter):
         write_simple_attrs(self.h5_guess, {'Loop_fit_method': "pycroscopy statistical", 'last_pixel': 0})
 
         self.h5_main.file.flush()
+
+    def _get_data_chunk(self):
+        """
+        Get the next chunk of raw data for doing the loop projections.
+
+        Parameters
+        ----------
+        verbose : Boolean
+            Whether or not to print debugging statements
+        """
+        if self._start_pos < self.max_pos:
+            self._current_sho_spec_slice = slice(self.sho_spec_inds_per_forc * self._current_forc,
+                                                 self.sho_spec_inds_per_forc * (self._current_forc + 1))
+            self._end_pos = int(min(self.h5_main.shape[0], self._start_pos + self.max_pos))
+            self.data = self.h5_main[self._start_pos:self._end_pos, self._current_sho_spec_slice]
+        elif self._current_forc < self._num_forcs - 1:
+            # Resest for next FORC
+            self._current_forc += 1
+
+            self._current_sho_spec_slice = slice(self.sho_spec_inds_per_forc * self._current_forc,
+                                                 self.sho_spec_inds_per_forc * (self._current_forc + 1))
+            self._current_met_spec_slice = slice(self.metrics_spec_inds_per_forc * self._current_forc,
+                                                 self.metrics_spec_inds_per_forc * (self._current_forc + 1))
+            self._get_dc_offset()
+
+            self._start_pos = 0
+            self._end_pos = int(min(self.h5_main.shape[0], self._start_pos + self.max_pos))
+            self.data = self.h5_main[self._start_pos:self._end_pos, self._current_sho_spec_slice]
+
+        else:
+            self.data = None
+
+    def do_projections(self, max_mem=None):
+
+        self._create_projection_datasets()
+
+        # TODO: Clean out this ugly junk!
+        if max_mem is None:
+            max_mem = self._maxDataChunk
+        else:
+            max_mem = min(max_mem, self._maxMemoryMB)
+            self._maxDataChunk = int(max_mem / self._maxCpus)
+
+        self._get_sho_chunk_sizes(max_mem)
+
+        '''
+        Get the first slice of the sho and loop metrics
+        '''
+        self._current_sho_spec_slice = slice(
+            self.sho_spec_inds_per_forc * self._current_forc,
+            self.sho_spec_inds_per_forc * (self._current_forc + 1))
+        self._current_met_spec_slice = slice(
+            self.metrics_spec_inds_per_forc * self._current_forc,
+            self.metrics_spec_inds_per_forc * (self._current_forc + 1))
+
+        '''
+        Get the dc_offset and data_chunk for the first slice
+        '''
+        self._get_dc_offset()
+        self._get_data_chunk()
+
+
+    def do_guess(self, max_mem=None, processors=None,
+                 get_loop_parameters=True):
+        """
+        Compute the loop projections and the initial guess for the loop parameters.
+
+        Parameters
+        ----------
+        processors : uint, optional
+            Number of processors to use for computing. Currently this is a serial operation and this attribute is
+            ignored.
+            Default None, output of psutil.cpu_count - 2 is used
+        max_mem : uint, optional
+            Memory in MB to use for computation
+            Default None, available memory from psutil.virtual_memory is used
+        get_loop_parameters : bool, optional
+            Should the physical loop parameters be calculated after the guess is done
+            Default True
+
+        Returns
+        -------
+        h5_guess : h5py.Dataset object
+            h5py dataset containing the guess parameters
+        """
+
+        # Before doing the Guess, we must first project the loops
+        self._create_projection_datasets()
+        if max_mem is None:
+            max_mem = self._maxDataChunk
+        else:
+            max_mem = min(max_mem, self._maxMemoryMB)
+            self._maxDataChunk = int(max_mem / self._maxCpus)
+
+        self._get_sho_chunk_sizes(max_mem)
+        self._create_guess_datasets()
+
+        '''
+        Get the first slice of the sho and loop metrics
+        '''
+        self._current_sho_spec_slice = slice(
+            self.sho_spec_inds_per_forc * self._current_forc,
+            self.sho_spec_inds_per_forc * (self._current_forc + 1))
+        self._current_met_spec_slice = slice(
+            self.metrics_spec_inds_per_forc * self._current_forc,
+            self.metrics_spec_inds_per_forc * (self._current_forc + 1))
+
+        '''
+        Get the dc_offset and data_chunk for the first slice
+        '''
+        self._get_dc_offset()
+        self._get_data_chunk()
+
+        '''
+        Loop over positions
+        '''
+        while self.data is not None:
+            # Reshape the SHO
+            print('Generating Guesses for FORC {}, and positions {}-{}'.format(
+                self._current_forc,
+                self._start_pos,
+                self._end_pos))
+            '''
+            Reshape the sho data by loops
+            '''
+            if len(self._sho_all_but_forc_inds) == 1:
+                # Check for the special case where there is only one loop
+                loops_2d = np.transpose(self.data)
+                order_dc_offset_reverse = np.array([1, 0], dtype=np.uint8)
+                nd_mat_shape_dc_first = loops_2d.shape
+            else:
+                loops_2d, order_dc_offset_reverse, nd_mat_shape_dc_first = self._reshape_sho_matrix(
+                    self.data)
+
+            '''
+            Do the projection and guess
+            '''
+            projected_loops_2d, loop_metrics_1d = self._project_loop_batch(
+                self.fit_dim_vec, np.transpose(loops_2d))
+            guessed_loops = self._guess_loops(self.fit_dim_vec,
+                                              projected_loops_2d)
+
+            # Reshape back
+            if len(self._sho_all_but_forc_inds) != 1:
+                projected_loops_2d2 = self._reshape_projected_loops_for_h5(
+                    projected_loops_2d.T,
+                    order_dc_offset_reverse,
+                    nd_mat_shape_dc_first)
+            else:
+                projected_loops_2d2 = projected_loops_2d
+
+            metrics_2d = self._reshape_results_for_h5(loop_metrics_1d,
+                                                      nd_mat_shape_dc_first)
+            guessed_loops_2 = self._reshape_results_for_h5(guessed_loops,
+                                                           nd_mat_shape_dc_first)
+
+            # Store results
+            self.h5_projected_loops[self._start_pos:self._end_pos,
+            self._current_sho_spec_slice] = projected_loops_2d2
+            self.h5_loop_metrics[self._start_pos:self._end_pos,
+            self._current_met_spec_slice] = metrics_2d
+            self.h5_guess[self._start_pos:self._end_pos,
+            self._current_met_spec_slice] = guessed_loops_2
+
+            self.h5_main.file.flush()
+
+            '''
+            Change the starting position and get the next chunk of data
+            '''
+            self._start_pos = self._end_pos
+            self._get_data_chunk()
+
+        if get_loop_parameters:
+            self.h5_guess_parameters = self.extract_loop_parameters(
+                self.h5_guess)
+
+        return USIDataset(self.h5_guess)
 
     def _create_fit_datasets(self):
         pass
