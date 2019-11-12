@@ -26,10 +26,20 @@ class BELoopProjector(Process):
     def __init__(self, h5_main, **kwargs):
         super(BELoopProjector, self).__init__(h5_main, **kwargs)
 
-        self._fit_dim_name = 'DC_Offset'
+        if 'DC_Offset' in self.h5_main.spec_dim_labels:
+            self._fit_dim_name = 'DC_Offset'
+        elif 'write_bias' in self.h5_main.spec_dim_labels:
+            self._fit_dim_name = 'write_bias'
+        else:
+            raise ValueError('Neither "DC_Offset", nor "write_bias" were '
+                             'spectroscopic dimension in the provided dataset '
+                             'which has dimensions: {}'
+                             '.'.format(self.h5_main.spec_dim_labels))
 
-        if self._fit_dim_name not in self.h5_main.spec_dim_labels:
-            raise ValueError('"' + self._fit_dim_name + '" not a spectroscopic dimension in the provided dataset which has dimensions: {}'.format(self.h5_main.spec_dim_labels))
+        if 'FORC' in self.h5_main.spec_dim_labels:
+            self._forc_dim_name = 'FORC'
+        else:
+            self._forc_dim_name = 'FORC_Cycle'
 
         # TODO: Need to catch KeyError s that would be thrown when attempting to access attributes
         file_data_type = get_attr(h5_main.file, 'data_type')
@@ -74,7 +84,10 @@ class BELoopProjector(Process):
 
         # Now Extract some basic parameters that are necessary for either the guess or fit
         self.dc_offsets_mat = self._get_dc_offsets(self.h5_main.h5_spec_inds,
-                                                   self.h5_main.h5_spec_vals)
+                                                   self.h5_main.h5_spec_vals,
+                                                   self._fit_dim_name,
+                                                   self._forc_dim_name,
+                                                   verbose=self.verbose)
 
     def _create_results_datasets(self):
         """
@@ -163,17 +176,18 @@ class BELoopProjector(Process):
                   '.'.format(len(self.data[0]), self.data[0][0].shape))
 
     @staticmethod
-    def _get_dc_offsets(h5_spec_inds, h5_spec_vals, verbose=False):
+    def _get_dc_offsets(h5_spec_inds, h5_spec_vals, fit_dim_name,
+                        forc_dim_name, verbose=False):
         # FORC is the decider whether or not DC_Offset changes.
         # FORC_Repeats etc. should not matter
         spec_unit_vals = get_unit_values(h5_spec_inds,
                                          h5_spec_vals,
                                          verbose=False)
-        if 'FORC' not in spec_unit_vals.keys():
+        if forc_dim_name not in spec_unit_vals.keys():
             if verbose:
                 print(
                     'This is not a FORC dataset. Just taking unit values for DC Offset')
-            dc_val_mat = np.expand_dims(spec_unit_vals['DC_Offset'], axis=0)
+            dc_val_mat = np.expand_dims(spec_unit_vals[fit_dim_name], axis=0)
         else:
             # Reshape the Spec values matrix into an N dimensional array
             if verbose:
@@ -201,12 +215,12 @@ class BELoopProjector(Process):
 
             # Note the indices of all other dimensions
             all_other_dims = set(range(len(spec_nd_labels))) - \
-                             set([spec_nd_labels.index('DC_Offset'),
-                                  spec_nd_labels.index('FORC')])
+                             set([spec_nd_labels.index(fit_dim_name),
+                                  spec_nd_labels.index(forc_dim_name)])
             # Set up a new order where FORC is at 0 and DC is at 1 and all
             # other dimensions (useless) follow
-            new_order = [spec_nd_labels.index('FORC'),
-                         spec_nd_labels.index('DC_Offset')] + list(
+            new_order = [spec_nd_labels.index(forc_dim_name),
+                         spec_nd_labels.index(fit_dim_name)] + list(
                 all_other_dims)
             if verbose:
                 print('Will transpose this N-dim matrix as: {}'.format(
@@ -273,14 +287,14 @@ class BELoopProjector(Process):
         return data_nd_s2f, dim_labels_s2f
 
     @staticmethod
-    def break_nd_by_forc(data_nd_s2f, dim_labels_s2f, num_forcs,
+    def break_nd_by_forc(data_nd_s2f, dim_labels_s2f, num_forcs, forc_dim_name,
                          verbose=False):
 
         if num_forcs > 1:
             # Fundamental assumption: FORC will always be the slowest dimension
             # YOu can have repeats, cycles etc. but all of those will
             # coreespond to the same FORC index - a single defintion for DC_Off
-            forc_dim_ind = dim_labels_s2f.index('FORC')
+            forc_dim_ind = dim_labels_s2f.index(forc_dim_name)
             forc_less_labels_s2f = dim_labels_s2f[
                                    :forc_dim_ind] + dim_labels_s2f[
                                                     forc_dim_ind + 1:]
@@ -316,7 +330,7 @@ class BELoopProjector(Process):
 
     @staticmethod
     def get_forc_pairs(forc_dsets, forc_less_labels_s2f, dc_val_mat,
-                       verbose=False):
+                       fit_dim_name, verbose=False):
 
         dc_vec = []
         resp_2d = []
@@ -329,7 +343,7 @@ class BELoopProjector(Process):
                                  '.'.format(len(forc_less_labels_s2f),
                                             forc_less_mat_nd.ndim))
 
-            dc_dim_ind = forc_less_labels_s2f.index('DC_Offset')
+            dc_dim_ind = forc_less_labels_s2f.index(fit_dim_name)
             if verbose and switch:
                 print(
                     '"DC_Offset" found at index: {} in list of dimensions: {}'.format(
@@ -377,12 +391,13 @@ class BELoopProjector(Process):
         forc_dsets, forc_less_labels_s2f = self.break_nd_by_forc(data_nd_s2f,
                                                                  list(dim_labels_s2f),
                                                                  self.dc_offsets_mat.shape[0],
+                                                                 self._forc_dim_name,
                                                                  verbose=self.verbose)
 
         self._num_forcs = len(forc_dsets)
 
         ret_vals = self.get_forc_pairs(forc_dsets, forc_less_labels_s2f,
-                                   self.dc_offsets_mat, verbose=self.verbose)
+                                   self.dc_offsets_mat, self._fit_dim_name, verbose=self.verbose)
 
         resp_2d, dc_vec, self.pre_flattening_shape, self.pre_flattening_dim_name_order = ret_vals
 
@@ -456,12 +471,12 @@ class BELoopProjector(Process):
     @staticmethod
     def _reformat_results_chunk(num_forcs, proj_loops, first_n_dim_shape,
                                 first_n_dim_names, dim_labels_s2f,
-                                num_pos_dims, verbose=False):
+                                num_pos_dims, forc_dim_name, verbose=False):
 
         # What we need to do is put the forc back as the slowest dimension before the pre_flattening shape:
         if num_forcs > 1:
             first_n_dim_shape = [num_forcs] + first_n_dim_shape
-            first_n_dim_names = ['FORC'] + first_n_dim_names
+            first_n_dim_names = [forc_dim_name] + first_n_dim_names
         if verbose:
             print('Dimension sizes & order: {} and names: {} that flattened '
                   'results will be reshaped to'
@@ -533,17 +548,19 @@ class BELoopProjector(Process):
                                                 self.pre_flattening_dim_name_order,
                                                 self._dim_labels_s2f,
                                                 len(self.h5_main.pos_dim_labels),
+                                                self._forc_dim_name,
                                                 verbose=self.verbose)
 
         met_labels_s2f = self._dim_labels_s2f.copy()
-        met_labels_s2f.remove('DC_Offset')
+        met_labels_s2f.remove(self._fit_dim_name)
 
         mets_2d = self._reformat_results_chunk(self._num_forcs, loop_mets,
-                                                self.pre_flattening_shape[:-1],
-                                                self.pre_flattening_dim_name_order[:-1],
-                                                met_labels_s2f,
-                                                len(self.h5_main.pos_dim_labels),
-                                                verbose=self.verbose)
+                                               self.pre_flattening_shape[:-1],
+                                               self.pre_flattening_dim_name_order[:-1],
+                                               met_labels_s2f,
+                                               len(self.h5_main.pos_dim_labels),
+                                               self._forc_dim_name,
+                                               verbose=self.verbose)
 
         # Which pixels are we working on?
         curr_pixels = self._get_pixels_in_current_batch()
