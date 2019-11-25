@@ -124,7 +124,7 @@ class Fitter(Process):
         raise NotImplementedError('Please override the _create_fit_datasets specific to your model')
         
     def _get_existing_datasets(self):
-        self.h5_guess = self.h5_results_grp['Guess']
+        self.h5_guess = USIDataset(self.h5_results_grp['Guess'])
         
         try:
             self._h5_status_dset = self.h5_results_grp[self._status_dset_name]
@@ -134,6 +134,7 @@ class Fitter(Process):
             
         try:
             self.h5_fit = self.h5_results_grp['Fit']
+            self.h5_fit = USIDataset(self.h5_fit)
         except KeyError:
             self.h5_fit = None
             if not self._is_guess:
