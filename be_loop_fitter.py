@@ -25,8 +25,8 @@ from pyUSID.io.dtype_utils import stack_real_to_compound
 from pyUSID.io.hdf_utils import get_unit_values, get_sort_order, \
     reshape_to_n_dims, get_attr, create_empty_dataset, create_results_group, \
     write_reduced_anc_dsets, write_simple_attrs, write_main_dataset
-from pyUSID import USIDataset
 from pyUSID.processing.comp_utils import get_MPI, recommend_cpu_cores
+from pyUSID.io.usi_data import USIDataset
 
 from fitter import Fitter
 
@@ -222,7 +222,7 @@ class BELoopFitter(Fitter):
         h5_loop_met_spec_inds, h5_loop_met_spec_vals = write_reduced_anc_dsets(
             self.h5_results_grp, self.h5_main.h5_spec_inds,
             self.h5_main.h5_spec_vals, self._fit_dim_name,
-            basename='Loop_Metrics', verbose=self.verbose)
+            basename='Loop_Metrics', verbose=False)
 
         self.h5_loop_metrics = write_main_dataset(self.h5_results_grp, (
         self.h5_main.shape[0], tot_cycles), 'Loop_Metrics',
@@ -251,6 +251,9 @@ class BELoopFitter(Fitter):
 
         self.h5_guess = create_empty_dataset(self.h5_loop_metrics, loop_fit32,
                                              'Guess')
+
+        self.h5_guess = USIDataset(self.h5_guess)
+
         write_simple_attrs(self.h5_results_grp, self.parms_dict)
 
         self.h5_main.file.flush()
@@ -264,6 +267,8 @@ class BELoopFitter(Fitter):
             raise ValueError('Need to guess before fitting!')
 
         self.h5_fit = create_empty_dataset(self.h5_guess, loop_fit32, 'Fit')
+        self.h5_fit = USIDataset(self.h5_fit)
+
         write_simple_attrs(self.h5_results_grp, self.parms_dict)
 
         self.h5_main.file.flush()
@@ -296,23 +301,23 @@ class BELoopFitter(Fitter):
         The challenge is that VDC and FORC are inner dimensions - 
         neither the fastest nor the slowest (guaranteed)
         """
-
         spec_dim_order_s2f = get_sort_order(self.h5_main.h5_spec_inds)[::-1]
 
         # order_to_s2f = list(pos_dim_order_s2f) + list( len(pos_dim_order_s2f) + spec_dim_order_s2f)
-        order_to_s2f = [0] + list(1 + spec_dim_order_s2f)
-        if self.verbose and self.mpi_rank == 0:
-            print('Order for reshaping to S2F: {}'.format(order_to_s2f))
-
         self._dim_labels_s2f = list(['Positions']) + list(
             np.array(self.h5_main.spec_dim_labels)[spec_dim_order_s2f])
-
-        if self.verbose and self.mpi_rank == 0:
-            print(self._dim_labels_s2f, order_to_s2f)
 
         self._num_forcs = int(
             any([targ in self.h5_main.spec_dim_labels for targ in
                  ['FORC', 'FORC_Cycle']]))
+
+        order_to_s2f = [0] + list(1 + spec_dim_order_s2f)
+        if self.verbose and self.mpi_rank == 0:
+            print('Order for reshaping to S2F: {}'.format(order_to_s2f))
+
+        if self.verbose and self.mpi_rank == 0:
+            print(self._dim_labels_s2f, order_to_s2f)
+
         if self._num_forcs:
             forc_pos = self.h5_main.spec_dim_labels.index(self._forc_dim_name)
             self._num_forcs = self.h5_main.spec_dim_sizes[forc_pos]
@@ -344,6 +349,9 @@ class BELoopFitter(Fitter):
             else:
                 this_forc_spec_inds = np.ones(
                     shape=self.h5_main.h5_spec_inds.shape[1], dtype=np.bool)
+
+            if self.verbose and self.mpi_rank == 0:
+                print('Spectroscopic slice: {}'.format(this_forc_spec_inds))
 
             if self._num_forcs:
                 this_forc_dc_vec = get_unit_values(
@@ -409,10 +417,10 @@ class BELoopFitter(Fitter):
 
             forc_mats.append(dc_rest_2d)
 
-            self.data = forc_mats, dc_mats
+        self.data = forc_mats, dc_mats
 
-            if self.verbose and self.mpi_rank == 0:
-                print('self.data loaded')
+        if self.verbose and self.mpi_rank == 0:
+            print('self.data loaded')
 
     def _read_guess_chunk(self):
         """
@@ -428,6 +436,9 @@ class BELoopFitter(Fitter):
         """
         # The Fitter class should take care of all the basic reading
         super(BELoopFitter, self)._read_guess_chunk()
+
+        print('h5_guess is:')
+        print(self.h5_guess)
 
         spec_dim_order_s2f = get_sort_order(self.h5_guess.h5_spec_inds)[::-1]
 
@@ -751,7 +762,7 @@ class BELoopFitter(Fitter):
         self._write_results_chunk = self._write_guess_chunk
 
     def set_up_fit(self, h5_partial_fit=None, h5_guess=None, ):
-        self.parms_dict = {'fit method': 'pycroscopy functional'}
+        self.parms_dict = {'fit_method': 'pycroscopy functional'}
 
         # ask super to take care of the rest, which is a standardized operation
         super(BELoopFitter, self).set_up_fit(h5_partial_fit=h5_partial_fit,
@@ -759,9 +770,12 @@ class BELoopFitter(Fitter):
 
         self._max_pos_per_read = self._max_raw_pos_per_read // 1.5
 
-        self._unit_computation = self.__guess_chunk
-        self.compute = self.do_guess
-        self._write_results_chunk = self._write_guess_chunk
+        self._unit_computation = self._unit_compute_fit
+        self.compute = self.do_fit
+        self._write_results_chunk = self._write_fit_chunk
+
+        print('Status dataset name is: ' + self._status_dset_name)
+        print([item for item in self.h5_results_grp])
 
     @staticmethod
     def BE_LOOP(coef_vec, data_vec, dc_vec, *args):
@@ -965,7 +979,42 @@ class BELoopFitter(Fitter):
         self.h5_loop_metrics[curr_pixels, :] = mets_2d
         self.h5_guess[curr_pixels, :] = guess_2d
 
+    def _write_fit_chunk(self):
+
         """
-        if self.verbose and self.mpi_rank == 0:
-            print('Finished ?')
+        self._results is now a zipped tuple containing:
+        1. a projected loop (an array of float32) and
+        2. a single compound element for hte loop metrics
+
+        Step 1 will be to unzip the two components into separate arrays
+        Step 2 will fold back the flattened 1 / 2D array into the N-dim form
+        Step 3 will reverse all transposes
+        Step 4 will flatten back to its original 2D form
+        Step 5 will finally write the data to an HDF5 file
         """
+
+        all_fits = np.array(self._results)
+
+        if self.verbose:
+            print('Unzipped results into Projected loops and Metrics arrays')
+
+        met_labels_s2f = self._dim_labels_s2f.copy()
+        met_labels_s2f.remove(self._fit_dim_name)
+
+        fits_2d = self._reformat_results_chunk(self._num_forcs, all_fits,
+                                               self._pre_flattening_shape[:-1],
+                                               self._pre_flattening_dim_name_order[:-1],
+                                               met_labels_s2f,
+                                               self._forc_dim_name,
+                                               verbose=self.verbose)
+
+        # Which pixels are we working on?
+        curr_pixels = self._get_pixels_in_current_batch()
+
+        if self.verbose:
+            print(
+                'Writing Fits of shape: {} and data type: {} to a dataset of shape: {} and data type {}'.format(
+                    fits_2d.shape, fits_2d.dtype, self.h5_fit.shape,
+                    self.h5_fit.dtype))
+
+        self.h5_fits[curr_pixels, :] = fits_2d
