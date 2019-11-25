@@ -17,7 +17,7 @@ from sklearn.cluster import KMeans
 from scipy.optimize import least_squares
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import pdist
-from be_loop import projectLoop, fit_loop, generate_guess, loop_fit_function, calc_switching_coef_vec, switching32
+from be_loop import projectLoop, fit_loop, generate_guess, loop_fit_function
 from tree import ClusterTree
 from be_sho_fitter import sho32
 
@@ -497,9 +497,21 @@ class BELoopFitter(Fitter):
 
             dc_rest_2d = this_forc_nd_s2f.ravel()
             print('Shape after flattening to 2D: {}'.format(dc_rest_2d.shape))
-            forc_mats.append(dc_rest_2d)
 
-        self.guess = forc_mats
+            # Scipy will not understand compound values. Flatten.
+            # Ignore the R2 error
+            float_mat = np.zeros(shape=list(dc_rest_2d.shape) + [len(loop_fit32.names)-1], dtype=np.float32)
+            print('New empty matrix of shape: {}'.format(float_mat.shape))
+            for ind, field_name in enumerate(loop_fit32.names[:-1]):
+                float_mat[..., ind] = dc_rest_2d[field_name]
+
+            print('Shape after flattening to float: {}'.format(float_mat.shape))
+
+            forc_mats.append(float_mat)
+
+        self.guess = np.array(forc_mats)
+        if self.verbose and self.mpi_rank == 0:
+            print('Flattened Guesses to shape: {} and dtype:'.format(self.guess.shape, self.guess.dtype))
 
     @staticmethod
     def _project_loop(sho_response, dc_offset):
@@ -777,6 +789,16 @@ class BELoopFitter(Fitter):
         print('Status dataset name is: ' + self._status_dset_name)
         print([item for item in self.h5_results_grp])
 
+    def do_fit(self, *args, override=False, **kwargs):
+        # This is REALLY ugly but needs to be done unless Projection becomes
+        # its own class, which I think it should be.
+        h5_main_orig = self.h5_main
+        # raw data is actually projected loops not raw SHO data
+        self.h5_main = self.h5_projected_loops
+        temp = super(BELoopFitter, self).do_fit(*args, override=override, **kwargs)
+        self.h5_main = h5_main_orig
+        return temp
+
     @staticmethod
     def BE_LOOP(coef_vec, data_vec, dc_vec, *args):
         """
@@ -828,7 +850,6 @@ class BELoopFitter(Fitter):
                   'solver_options: {}'.format(obj_func, solver_options))
 
         # TODO: Generalize this bit. Use Parallel compute instead!
-
         if self.mpi_size > 1:
             if self.verbose:
                 print('Rank {}: About to start serial computation'
@@ -836,15 +857,21 @@ class BELoopFitter(Fitter):
 
             self._results = list()
             for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self.guess):
+                if self.verbose:
+                    print('Setting up delayed joblib based on DC: {}<{}>, loops: {}<{}>, Guess: {}<{}>'.format(dc_vec.shape, dc_vec.dtype, loops_2d.shape, loops_2d.dtype, guess_parms.shape, guess_parms.dtype))
+
                 '''
                 Shift the loops and vdc vector
                 '''
                 shift_ind, vdc_shifted = self.shift_vdc(dc_vec)
-                loops_2d_shifted = np.roll(loops_2d, shift_ind, axis=0).T
+                loops_2d_shifted = np.roll(loops_2d, shift_ind, axis=1)
+
+                if self.verbose:
+                    print('Setting up delayed joblib based on DC: {}<{}>, loops: {}<{}>, Guess: {}<{}>'.format(vdc_shifted.shape, vdc_shifted.dtype, loops_2d_shifted.shape, loops_2d_shifted.dtype, guess_parms.shape, guess_parms.dtype))
 
                 for loop_resp, loop_guess in zip(loops_2d_shifted, guess_parms):
                     curr_results = least_squares(obj_func, loop_guess,
-                                                 args=[loop_resp, dc_vec],
+                                                 args=[loop_resp, vdc_shifted],
                                                  **solver_options)
                     self._results.append(curr_results)
         else:
@@ -855,17 +882,27 @@ class BELoopFitter(Fitter):
 
             values = list()
             for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self.guess):
-                temp = [joblib.delayed(least_squares)(obj_func, this_guess,
-                                                    args=[this_loop, dc_vec],
-                                                    **solver_options) for
-                      this_loop, this_guess in zip(loops_2d, guess_parms)]
+                if self.verbose:
+                    print('Setting up delayed joblib based on DC: {} loops: {}, Guess: {}'.format(dc_vec.shape, loops_2d.shape, guess_parms.shape))
+                '''
+                Shift the loops and vdc vector
+                '''
+                shift_ind, vdc_shifted = self.shift_vdc(dc_vec)
+                loops_2d_shifted = np.roll(loops_2d, shift_ind, axis=1)
+
+                if self.verbose:
+                    print('Setting up delayed joblib based on DC: {}<{}>, loops: {}<{}>, Guess: {}<{}>'.format(vdc_shifted.shape, vdc_shifted.dtype, loops_2d_shifted.shape, loops_2d_shifted.dtype, guess_parms.shape, guess_parms.dtype))
+
+                temp = [joblib.delayed(least_squares)(obj_func, loop_guess, args=[loop_resp, vdc_shifted], **solver_options) for loop_resp, loop_guess in zip(loops_2d_shifted, guess_parms)]
                 values.append(temp)
+            if self.verbose:
+                print('Finished setting up delayed computations. Starting parallel compute')
             self._results = joblib.Parallel(n_jobs=cores)(values)
 
         if self.verbose and self.mpi_rank == 0:
             print(
-                'Finished computing fits on {} objects. Results of length: {}'
-                '.'.format(self.data.shape[0], len(self._results)))
+                'Finished computing fits on {} objects'
+                ''.format(len(self._results)))
 
         # What least_squares returns is an object that needs to be extracted
         # to get the coefficients. This is handled by the write function
@@ -992,11 +1029,15 @@ class BELoopFitter(Fitter):
         Step 4 will flatten back to its original 2D form
         Step 5 will finally write the data to an HDF5 file
         """
+        # To compound dataset: Note that this is a memory duplication!
+        temp = np.array(
+            [np.hstack([result.x, result.fun]) for result in self._results])
+        self._results = stack_real_to_compound(temp, loop_fit32)
 
         all_fits = np.array(self._results)
 
         if self.verbose:
-            print('Unzipped results into Projected loops and Metrics arrays')
+            print('Results of shape: {} and dtype: {}'.format(all_fits.shape, all_fits.dtype))
 
         met_labels_s2f = self._dim_labels_s2f.copy()
         met_labels_s2f.remove(self._fit_dim_name)
@@ -1017,4 +1058,4 @@ class BELoopFitter(Fitter):
                     fits_2d.shape, fits_2d.dtype, self.h5_fit.shape,
                     self.h5_fit.dtype))
 
-        self.h5_fits[curr_pixels, :] = fits_2d
+        self.h5_fit[curr_pixels, :] = fits_2d
