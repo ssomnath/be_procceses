@@ -12,7 +12,8 @@ from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_res
 from pyUSID.processing.comp_utils import recommend_cpu_cores
 
 # From this project:
-from utils import *
+from utils import sho_error, reshape_to_one_step, reshape_to_n_steps, \
+    is_reshapable, complex_gaussian, wavelet_peaks
 from usi_data import USIDataset
 from fitter import Fitter
 
