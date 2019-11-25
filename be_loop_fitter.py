@@ -639,7 +639,7 @@ class BELoopFitter(Fitter):
         for proj_loops_this_forc, curr_vdc in zip(proj_forc, dc_vec_list):
             # this works on batches and not individual loops
             # Cannot be done in parallel
-            this_guesses = self._guess_loops(proj_loops_this_forc, curr_vdc)
+            this_guesses = self._guess_loops(curr_vdc, proj_loops_this_forc)
             all_guesses.append(this_guesses)
 
         self._results = proj_loops, loop_mets, np.array(all_guesses)
