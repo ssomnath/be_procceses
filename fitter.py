@@ -170,10 +170,11 @@ class Fitter(Process):
         return USIDataset(self.h5_results_grp['Guess']) 
     
     def do_fit(self, *args, override=False, **kwargs):
+        # Either delete or reset 'last_pixel' attribute to 0
+        # This value will be used for filling in the status dataset.
+        self.h5_results_grp.attrs['last_pixel'] = 0
         self.h5_results_grp = super(Fitter, self).compute(override=override)
-        return USIDataset(self.h5_results_grp['Fit']) 
-    
-    # DBJV46
+        return USIDataset(self.h5_results_grp['Fit'])
     
     def _reformat_results(self, results, strategy='wavelet_peaks'):
         """
