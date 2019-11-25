@@ -11,24 +11,22 @@ Created on Thu Aug 25 11:48:53 2016
 
 from __future__ import division, print_function, absolute_import, unicode_literals
 from enum import Enum
-from warnings import warn
 import joblib
 import numpy as np
-import scipy
 from sklearn.cluster import KMeans
+from scipy.optimize import least_squares
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import pdist
-from be_loop import projectLoop, fit_loop, generate_guess, calc_switching_coef_vec, switching32
+from be_loop import projectLoop, fit_loop, generate_guess, loop_fit_function, calc_switching_coef_vec, switching32
 from tree import ClusterTree
 from be_sho_fitter import sho32
 
-from pyUSID.io.dtype_utils import flatten_compound_to_real, stack_real_to_compound
-from pyUSID.io.hdf_utils import get_unit_values, \
-    get_sort_order, get_dimensionality, reshape_to_n_dims, reshape_from_n_dims, get_attr, \
-    create_empty_dataset, create_results_group, write_reduced_anc_dsets, write_simple_attrs, write_main_dataset
-from pyUSID.processing.comp_utils import get_available_memory
+from pyUSID.io.dtype_utils import stack_real_to_compound
+from pyUSID.io.hdf_utils import get_unit_values, get_sort_order, \
+    reshape_to_n_dims, get_attr, create_empty_dataset, create_results_group, \
+    write_reduced_anc_dsets, write_simple_attrs, write_main_dataset
 from pyUSID import USIDataset
-from pyUSID.processing.comp_utils import get_MPI
+from pyUSID.processing.comp_utils import get_MPI, recommend_cpu_cores
 
 from fitter import Fitter
 
@@ -189,6 +187,372 @@ class BELoopFitter(Fitter):
             if get_attr(h5_meas_grp, 'VS_mode') != 'cKPFM':
                 raise ValueError('Provided dataset has an unsupported VS_mode: "' + get_attr(h5_meas_grp, 'VS_mode') + '"')
 
+    def __create_projection_datasets(self):
+        """
+        Setup the Loop_Fit Group and the loop projection datasets
+
+        """
+
+        # Which row in the spec datasets is DC offset?
+        _fit_spec_index = self.h5_main.spec_dim_labels.index(
+            self._fit_dim_name)
+
+        # TODO: Unkown usage of variable. Waste either way
+        # self._fit_offset_index = 1 + _fit_spec_index
+
+        # Calculate the number of loops per position
+        cycle_start_inds = np.argwhere(
+            self.h5_main.h5_spec_inds[_fit_spec_index, :] == 0).flatten()
+        tot_cycles = cycle_start_inds.size
+        if self.verbose:
+            print('Found {} cycles starting at indices: {}'.format(tot_cycles,
+                                                                   cycle_start_inds))
+
+        # Make the results group
+        self.h5_results_grp = create_results_group(self.h5_main,
+                                                   self.process_name)
+        write_simple_attrs(self.h5_results_grp, self.parms_dict)
+
+        # Write datasets
+        self.h5_projected_loops = create_empty_dataset(self.h5_main,
+                                                       np.float32,
+                                                       'Projected_Loops',
+                                                       h5_group=self.h5_results_grp)
+
+        h5_loop_met_spec_inds, h5_loop_met_spec_vals = write_reduced_anc_dsets(
+            self.h5_results_grp, self.h5_main.h5_spec_inds,
+            self.h5_main.h5_spec_vals, self._fit_dim_name,
+            basename='Loop_Metrics', verbose=self.verbose)
+
+        self.h5_loop_metrics = write_main_dataset(self.h5_results_grp, (
+        self.h5_main.shape[0], tot_cycles), 'Loop_Metrics',
+                                                  'Metrics', 'compound', None,
+                                                  None, dtype=loop_metrics32,
+                                                  h5_pos_inds=self.h5_main.h5_pos_inds,
+                                                  h5_pos_vals=self.h5_main.h5_pos_vals,
+                                                  h5_spec_inds=h5_loop_met_spec_inds,
+                                                  h5_spec_vals=h5_loop_met_spec_vals)
+
+        # Copy region reference:
+        # copy_region_refs(self.h5_main, self.h5_projected_loops)
+        # copy_region_refs(self.h5_main, self.h5_loop_metrics)
+
+        self.h5_main.file.flush()
+        self._met_spec_inds = self.h5_loop_metrics.h5_spec_inds
+
+        if self.verbose and self.mpi_rank == 0:
+            print('Finished creating Guess dataset')
+
+    def _create_guess_datasets(self):
+        """
+        Creates the HDF5 Guess dataset
+        """
+        self.__create_projection_datasets()
+
+        self.h5_guess = create_empty_dataset(self.h5_loop_metrics, loop_fit32,
+                                             'Guess')
+        write_simple_attrs(self.h5_results_grp, self.parms_dict)
+
+        self.h5_main.file.flush()
+
+    def _create_fit_datasets(self):
+        """
+        Creates the HDF5 Fit dataset
+        """
+
+        if self.h5_guess is None:
+            raise ValueError('Need to guess before fitting!')
+
+        self.h5_fit = create_empty_dataset(self.h5_guess, loop_fit32, 'Fit')
+        write_simple_attrs(self.h5_results_grp, self.parms_dict)
+
+        self.h5_main.file.flush()
+
+    def _read_data_chunk(self):
+        """
+        Get the next chunk of raw data for doing the loop projections.
+        """
+
+        # The Process class should take care of all the basic reading
+        super(BELoopFitter, self)._read_data_chunk()
+
+        if self.data is None:
+            # Nothing we can do at this point
+            return
+
+        if self.verbose and self.mpi_rank == 0:
+            print('BELoopFitter got raw data of shape {} from super'
+                  '.'.format(self.data.shape))
+
+        """
+        Now self.data contains data for N pixels. 
+        The challenge is that this may contain M FORC cycles 
+        Each FORC cycle needs its own V DC vector
+        So, we can't blindly use the inherited unit_compute. 
+        Our variables now are Position, Vdc, FORC, all others
+
+        We want M lists of [VDC x all other variables]
+
+        The challenge is that VDC and FORC are inner dimensions - 
+        neither the fastest nor the slowest (guaranteed)
+        """
+
+        spec_dim_order_s2f = get_sort_order(self.h5_main.h5_spec_inds)[::-1]
+
+        # order_to_s2f = list(pos_dim_order_s2f) + list( len(pos_dim_order_s2f) + spec_dim_order_s2f)
+        order_to_s2f = [0] + list(1 + spec_dim_order_s2f)
+        if self.verbose and self.mpi_rank == 0:
+            print('Order for reshaping to S2F: {}'.format(order_to_s2f))
+
+        self._dim_labels_s2f = list(['Positions']) + list(
+            np.array(self.h5_main.spec_dim_labels)[spec_dim_order_s2f])
+
+        if self.verbose and self.mpi_rank == 0:
+            print(self._dim_labels_s2f, order_to_s2f)
+
+        self._num_forcs = int(
+            any([targ in self.h5_main.spec_dim_labels for targ in
+                 ['FORC', 'FORC_Cycle']]))
+        if self._num_forcs:
+            forc_pos = self.h5_main.spec_dim_labels.index(self._forc_dim_name)
+            self._num_forcs = self.h5_main.spec_dim_sizes[forc_pos]
+
+        if self.verbose and self.mpi_rank == 0:
+            print('Num FORCS: {}'.format(self._num_forcs))
+
+        all_but_forc_rows = []
+        for ind, dim_name in enumerate(self.h5_main.spec_dim_labels):
+            if dim_name not in ['FORC', 'FORC_Cycle', 'FORC_repeat']:
+                all_but_forc_rows.append(ind)
+
+        if self.verbose and self.mpi_rank == 0:
+            print('All but FORC rows: {}'.format(all_but_forc_rows))
+
+        dc_mats = []
+
+        forc_mats = []
+
+        num_reps = 1 if self._num_forcs == 0 else self._num_forcs
+        for forc_ind in range(num_reps):
+            if self.verbose and self.mpi_rank == 0:
+                print('\nWorking on FORC #{}'.format(forc_ind))
+
+            if self._num_forcs:
+                this_forc_spec_inds = \
+                    np.where(self.h5_main.h5_spec_inds[forc_pos] == forc_ind)[
+                        0]
+            else:
+                this_forc_spec_inds = np.ones(
+                    shape=self.h5_main.h5_spec_inds.shape[1], dtype=np.bool)
+
+            if self._num_forcs:
+                this_forc_dc_vec = get_unit_values(
+                    self.h5_main.h5_spec_inds[all_but_forc_rows][:,
+                    this_forc_spec_inds],
+                    self.h5_main.h5_spec_vals[all_but_forc_rows][:,
+                    this_forc_spec_inds],
+                    all_dim_names=list(np.array(self.h5_main.spec_dim_labels)[
+                                           all_but_forc_rows]),
+                    dim_names=self._fit_dim_name)
+            else:
+                this_forc_dc_vec = get_unit_values(self.h5_main.h5_spec_inds,
+                                                   self.h5_main.h5_spec_vals,
+                                                   dim_names=self._fit_dim_name)
+            this_forc_dc_vec = this_forc_dc_vec[self._fit_dim_name]
+            dc_mats.append(this_forc_dc_vec)
+
+            this_forc_2d = self.data[:, this_forc_spec_inds]
+            if self.verbose and self.mpi_rank == 0:
+                print('2D slice shape for this FORC: {}'.format(this_forc_2d.shape))
+
+            this_forc_nd, success = reshape_to_n_dims(this_forc_2d,
+                                                      h5_pos=None,
+                                                      h5_spec=self.h5_main.h5_spec_inds[
+                                                              :,
+                                                              this_forc_spec_inds])
+            if self.verbose and self.mpi_rank == 0:
+                print(this_forc_nd.shape)
+
+            this_forc_nd_s2f = this_forc_nd.transpose(
+                order_to_s2f).squeeze()  # squeeze out FORC
+            dim_names_s2f = self._dim_labels_s2f.copy()
+            if self._num_forcs > 0:
+                dim_names_s2f.remove(
+                    self._forc_dim_name)  # because it was never there in the first place.
+            if self.verbose and self.mpi_rank == 0:
+                print('Reordered to S2F: {}, {}'.format(this_forc_nd_s2f.shape,
+                                                    dim_names_s2f))
+
+            rest_dc_order = list(range(len(dim_names_s2f)))
+            _dc_ind = dim_names_s2f.index(self._fit_dim_name)
+            rest_dc_order.remove(_dc_ind)
+            rest_dc_order = rest_dc_order + [_dc_ind]
+            if self.verbose and self.mpi_rank == 0:
+                print('Transpose for reordering to rest, DC: {}'.format(
+                rest_dc_order))
+
+            rest_dc_nd = this_forc_nd_s2f.transpose(rest_dc_order)
+            rest_dc_names = list(np.array(dim_names_s2f)[rest_dc_order])
+
+            self._pre_flattening_shape = list(rest_dc_nd.shape)
+            self._pre_flattening_dim_name_order = list(rest_dc_names)
+
+            if self.verbose and self.mpi_rank == 0:
+                print('After reodering: {}, {}'.format(rest_dc_nd.shape,
+                                                       rest_dc_names))
+
+            dc_rest_2d = rest_dc_nd.reshape(np.prod(rest_dc_nd.shape[:-1]),
+                                            np.prod(rest_dc_nd.shape[-1]))
+
+            if self.verbose and self.mpi_rank == 0:
+                print('Shape after flattening to 2D: {}'.format(dc_rest_2d.shape))
+
+            forc_mats.append(dc_rest_2d)
+
+            self.data = forc_mats, dc_mats
+
+            if self.verbose and self.mpi_rank == 0:
+                print('self.data loaded')
+
+    def _read_guess_chunk(self):
+        """
+        Returns a chunk of guess dataset corresponding to the main dataset.
+
+        Parameters
+        -----
+        None
+
+        Returns
+        --------
+
+        """
+        # The Fitter class should take care of all the basic reading
+        super(BELoopFitter, self)._read_guess_chunk()
+
+        spec_dim_order_s2f = get_sort_order(self.h5_guess.h5_spec_inds)[::-1]
+
+        order_to_s2f = [0] + list(1 + spec_dim_order_s2f)
+        print('Order for reshaping to S2F: {}'.format(order_to_s2f))
+
+        dim_labels_s2f = list(['Positions']) + list(
+            np.array(self.h5_guess.spec_dim_labels)[spec_dim_order_s2f])
+
+        print(dim_labels_s2f, order_to_s2f)
+
+        num_forcs = int(any([targ in self.h5_guess.spec_dim_labels for targ in
+                             ['FORC', 'FORC_Cycle']]))
+        if num_forcs:
+            forc_pos = self.h5_guess.spec_dim_labels.index(self._forc_dim_name)
+            num_forcs = self.h5_guess.spec_dim_sizes[forc_pos]
+        print('Num FORCS: {}'.format(num_forcs))
+
+        all_but_forc_rows = []
+        for ind, dim_name in enumerate(self.h5_guess.spec_dim_labels):
+            if dim_name not in ['FORC', 'FORC_Cycle', 'FORC_repeat']:
+                all_but_forc_rows.append(ind)
+        print('All but FORC rows: {}'.format(all_but_forc_rows))
+
+        forc_mats = []
+
+        num_reps = 1 if num_forcs == 0 else num_forcs
+        for forc_ind in range(num_reps):
+            print('')
+            print('Working on FORC #{}'.format(forc_ind))
+            if num_forcs:
+                this_forc_spec_inds = \
+                np.where(self.h5_guess.h5_spec_inds[forc_pos] == forc_ind)[0]
+            else:
+                this_forc_spec_inds = np.ones(
+                    shape=self.h5_guess.h5_spec_inds.shape[1], dtype=np.bool)
+
+            this_forc_2d = self.guess[:, this_forc_spec_inds]
+            print('2D slice shape for this FORC: {}'.format(this_forc_2d.shape))
+
+            this_forc_nd, success = reshape_to_n_dims(this_forc_2d,
+                                                      h5_pos=None,
+                                                      h5_spec=self.h5_guess.h5_spec_inds[
+                                                              :,
+                                                              this_forc_spec_inds])
+            print(this_forc_nd.shape)
+
+            this_forc_nd_s2f = this_forc_nd.transpose(
+                order_to_s2f).squeeze()  # squeeze out FORC
+            dim_names_s2f = dim_labels_s2f.copy()
+            if num_forcs > 0:
+                dim_names_s2f.remove(self._forc_dim_name)
+                # because it was never there in the first place.
+            print('Reordered to S2F: {}, {}'.format(this_forc_nd_s2f.shape,
+                                                    dim_names_s2f))
+
+            dc_rest_2d = this_forc_nd_s2f.ravel()
+            print('Shape after flattening to 2D: {}'.format(dc_rest_2d.shape))
+            forc_mats.append(dc_rest_2d)
+
+        self.guess = forc_mats
+
+    @staticmethod
+    def _project_loop(sho_response, dc_offset):
+        # projected_loop = np.zeros(shape=sho_response.shape, dtype=np.float32)
+        ancillary = np.zeros(shape=1, dtype=loop_metrics32)
+
+        pix_dict = projectLoop(np.squeeze(dc_offset),
+                               sho_response['Amplitude [V]'],
+                               sho_response['Phase [rad]'])
+
+        projected_loop = pix_dict['Projected Loop']
+        ancillary['Rotation Angle [rad]'] = pix_dict['Rotation Matrix'][0]
+        ancillary['Offset'] = pix_dict['Rotation Matrix'][1]
+        ancillary['Area'] = pix_dict['Geometric Area']
+        ancillary['Centroid x'] = pix_dict['Centroid'][0]
+        ancillary['Centroid y'] = pix_dict['Centroid'][1]
+
+        return projected_loop, ancillary
+
+    @staticmethod
+    def __compute_batches(resp_2d_list, dc_vec_list, map_func, req_cores,
+                          verbose=False):
+
+        if verbose:
+            print('Unit computation found {} FORC datasets with {} corresponding DC vectors'.format(len(resp_2d_list), len(dc_vec_list)))
+            print('First dataset of shape: {}'.format(resp_2d_list[0].shape))
+
+        MPI = get_MPI()
+        if MPI is not None:
+            rank = MPI.COMM_WORLD.Get_rank()
+            cores = 1
+        else:
+            rank = 0
+            cores = req_cores
+
+        if verbose:
+            print(
+                'Rank {} starting loop projections on {} cores (requested {} cores)'.format(
+                    rank, cores, req_cores))
+
+        if cores > 1:
+            values = []
+            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
+                print(loops_2d.shape, curr_vdc.shape, map_func)
+                values += [joblib.delayed(map_func)(x, [curr_vdc])
+                           for x
+                           in loops_2d]
+            results = joblib.Parallel(n_jobs=cores)(values)
+
+            # Finished reading the entire data set
+            print('Rank {} finished parallel computation'.format(rank))
+
+        else:
+            if verbose:
+                print("Rank {} computing serially ...".format(rank))
+            # List comprehension vs map vs for loop?
+            # https://stackoverflow.com/questions/1247486/python-list-comprehension-vs-map
+            results = []
+            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
+                results += [map_func(vector, curr_vdc) for vector in
+                            loops_2d]
+
+        return results
+
     @staticmethod
     def _guess_loops(vdc_vec, projected_loops_2d):
         """
@@ -325,277 +689,6 @@ class BELoopFitter(Fitter):
         vdc_shifted = np.roll(vdc_vec, shift_ind)
         return shift_ind, vdc_shifted
 
-    def __create_projection_datasets(self):
-        """
-        Setup the Loop_Fit Group and the loop projection datasets
-
-        """
-        # First grab the spectroscopic indices and values and position indices
-        # TODO: Avoid unnecessary namespace pollution
-        # self._sho_spec_inds = self.h5_main.h5_spec_inds
-        # self._sho_spec_vals = self.h5_main.h5_spec_vals
-        # self._sho_pos_inds = self.h5_main.h5_pos_inds
-
-        # Which row in the spec datasets is DC offset?
-        _fit_spec_index = self.h5_main.spec_dim_labels.index(
-            self._fit_dim_name)
-
-        # TODO: Unkown usage of variable. Waste either way
-        # self._fit_offset_index = 1 + _fit_spec_index
-
-        # Calculate the number of loops per position
-        cycle_start_inds = np.argwhere(
-            self.h5_main.h5_spec_inds[_fit_spec_index, :] == 0).flatten()
-        tot_cycles = cycle_start_inds.size
-        if self.verbose:
-            print('Found {} cycles starting at indices: {}'.format(tot_cycles,
-                                                                   cycle_start_inds))
-
-        # Make the results group
-        self.h5_results_grp = create_results_group(self.h5_main,
-                                                   self.process_name)
-        write_simple_attrs(self.h5_results_grp, self.parms_dict)
-
-        # Write datasets
-        self.h5_projected_loops = create_empty_dataset(self.h5_main,
-                                                       np.float32,
-                                                       'Projected_Loops',
-                                                       h5_group=self.h5_results_grp)
-
-        h5_loop_met_spec_inds, h5_loop_met_spec_vals = write_reduced_anc_dsets(
-            self.h5_results_grp, self.h5_main.h5_spec_inds,
-            self.h5_main.h5_spec_vals, self._fit_dim_name,
-            basename='Loop_Metrics', verbose=self.verbose)
-
-        self.h5_loop_metrics = write_main_dataset(self.h5_results_grp, (
-        self.h5_main.shape[0], tot_cycles), 'Loop_Metrics',
-                                                  'Metrics', 'compound', None,
-                                                  None, dtype=loop_metrics32,
-                                                  h5_pos_inds=self.h5_main.h5_pos_inds,
-                                                  h5_pos_vals=self.h5_main.h5_pos_vals,
-                                                  h5_spec_inds=h5_loop_met_spec_inds,
-                                                  h5_spec_vals=h5_loop_met_spec_vals)
-
-        # Copy region reference:
-        # copy_region_refs(self.h5_main, self.h5_projected_loops)
-        # copy_region_refs(self.h5_main, self.h5_loop_metrics)
-
-        self.h5_main.file.flush()
-        self._met_spec_inds = self.h5_loop_metrics.h5_spec_inds
-
-        if self.verbose and self.mpi_rank == 0:
-            print('Finished creating Guess dataset')
-
-    def _create_guess_datasets(self):
-        """
-        Creates the HDF5 Guess dataset and links the it to the ancillary datasets.
-        """
-        self.__create_projection_datasets()
-
-        self.h5_guess = create_empty_dataset(self.h5_loop_metrics, loop_fit32, 'Guess')
-        write_simple_attrs(self.h5_results_grp, self.parms_dict)
-
-        self.h5_main.file.flush()
-
-    def _read_data_chunk(self):
-        """
-        Get the next chunk of raw data for doing the loop projections.
-
-        Parameters
-        ----------
-        verbose : Boolean
-            Whether or not to print debugging statements
-        """
-        """
-                Returns the next chunk of data for the guess or the fit
-                """
-
-        # The Process class should take care of all the basic reading
-        super(BELoopFitter, self)._read_data_chunk()
-
-        if self.data is None:
-            # Nothing we can do at this point
-            return
-
-        if self.verbose and self.mpi_rank == 0:
-            print('BELoopFitter got raw data of shape {} from super'
-                  '.'.format(self.data.shape))
-
-        """
-        Now self.data contains data for N pixels. 
-        The challenge is that this may contain M FORC cycles 
-        Each FORC cycle needs its own V DC vector
-        So, we can't blindly use the inherited unit_compute. 
-        Our variables now are Position, Vdc, FORC, all others
-
-        We want M lists of [VDC x all other variables]
-
-        The challenge is that VDC and FORC are inner dimensions - 
-        neither the fastest nor the slowest (guaranteed)
-        """
-
-        spec_dim_order_s2f = get_sort_order(self.h5_main.h5_spec_inds)[::-1]
-
-        # order_to_s2f = list(pos_dim_order_s2f) + list( len(pos_dim_order_s2f) + spec_dim_order_s2f)
-        order_to_s2f = [0] + list(1 + spec_dim_order_s2f)
-        if self.verbose and self.mpi_rank == 0:
-            print('Order for reshaping to S2F: {}'.format(order_to_s2f))
-
-        self._dim_labels_s2f = list(['Positions']) + list(
-            np.array(self.h5_main.spec_dim_labels)[spec_dim_order_s2f])
-
-        if self.verbose and self.mpi_rank == 0:
-            print(self._dim_labels_s2f, order_to_s2f)
-
-        self._num_forcs = int(
-            any([targ in self.h5_main.spec_dim_labels for targ in
-                 ['FORC', 'FORC_Cycle']]))
-        if self._num_forcs:
-            forc_pos = self.h5_main.spec_dim_labels.index(self._forc_dim_name)
-            self._num_forcs = self.h5_main.spec_dim_sizes[forc_pos]
-
-        if self.verbose and self.mpi_rank == 0:
-            print('Num FORCS: {}'.format(self._num_forcs))
-
-        all_but_forc_rows = []
-        for ind, dim_name in enumerate(self.h5_main.spec_dim_labels):
-            if dim_name not in ['FORC', 'FORC_Cycle', 'FORC_repeat']:
-                all_but_forc_rows.append(ind)
-
-        if self.verbose and self.mpi_rank == 0:
-            print('All but FORC rows: {}'.format(all_but_forc_rows))
-
-        dc_mats = []
-
-        forc_mats = []
-
-        num_reps = 1 if self._num_forcs == 0 else self._num_forcs
-        for forc_ind in range(num_reps):
-            if self.verbose and self.mpi_rank == 0:
-                print('\nWorking on FORC #{}'.format(forc_ind))
-
-            if self._num_forcs:
-                this_forc_spec_inds = \
-                    np.where(self.h5_main.h5_spec_inds[forc_pos] == forc_ind)[
-                        0]
-            else:
-                this_forc_spec_inds = np.ones(
-                    shape=self.h5_main.h5_spec_inds.shape[1], dtype=np.bool)
-
-            if self._num_forcs:
-                this_forc_dc_vec = get_unit_values(
-                    self.h5_main.h5_spec_inds[all_but_forc_rows][:,
-                    this_forc_spec_inds],
-                    self.h5_main.h5_spec_vals[all_but_forc_rows][:,
-                    this_forc_spec_inds],
-                    all_dim_names=list(np.array(self.h5_main.spec_dim_labels)[
-                                           all_but_forc_rows]),
-                    dim_names=self._fit_dim_name)
-            else:
-                this_forc_dc_vec = get_unit_values(self.h5_main.h5_spec_inds,
-                                                   self.h5_main.h5_spec_vals,
-                                                   dim_names=self._fit_dim_name)
-            this_forc_dc_vec = this_forc_dc_vec[self._fit_dim_name]
-            dc_mats.append(this_forc_dc_vec)
-
-            this_forc_2d = self.h5_main[:, this_forc_spec_inds]
-            if self.verbose and self.mpi_rank == 0:
-                print('2D slice shape for this FORC: {}'.format(this_forc_2d.shape))
-
-            this_forc_nd, success = reshape_to_n_dims(this_forc_2d,
-                                                      h5_pos=None,
-                                                      h5_spec=self.h5_main.h5_spec_inds[
-                                                              :,
-                                                              this_forc_spec_inds])
-            if self.verbose and self.mpi_rank == 0:
-                print(this_forc_nd.shape)
-
-            this_forc_nd_s2f = this_forc_nd.transpose(
-                order_to_s2f).squeeze()  # squeeze out FORC
-            dim_names_s2f = self._dim_labels_s2f.copy()
-            if self._num_forcs > 0:
-                dim_names_s2f.remove(
-                    self._forc_dim_name)  # because it was never there in the first place.
-            if self.verbose and self.mpi_rank == 0:
-                print('Reordered to S2F: {}, {}'.format(this_forc_nd_s2f.shape,
-                                                    dim_names_s2f))
-
-            rest_dc_order = list(range(len(dim_names_s2f)))
-            _dc_ind = dim_names_s2f.index(self._fit_dim_name)
-            rest_dc_order.remove(_dc_ind)
-            rest_dc_order = rest_dc_order + [_dc_ind]
-            if self.verbose and self.mpi_rank == 0:
-                print('Transpose for reordering to rest, DC: {}'.format(
-                rest_dc_order))
-
-            rest_dc_nd = this_forc_nd_s2f.transpose(rest_dc_order)
-            rest_dc_names = list(np.array(dim_names_s2f)[rest_dc_order])
-
-            self._pre_flattening_shape = list(rest_dc_nd.shape)
-            self._pre_flattening_dim_name_order = list(rest_dc_names)
-
-            if self.verbose and self.mpi_rank == 0:
-                print('After reodering: {}, {}'.format(rest_dc_nd.shape,
-                                                       rest_dc_names))
-
-            dc_rest_2d = rest_dc_nd.reshape(np.prod(rest_dc_nd.shape[:-1]),
-                                            np.prod(rest_dc_nd.shape[-1]))
-
-            if self.verbose and self.mpi_rank == 0:
-                print('Shape after flattening to 2D: {}'.format(dc_rest_2d.shape))
-
-            forc_mats.append(dc_rest_2d)
-
-            self.data = forc_mats, dc_mats
-
-            if self.verbose and self.mpi_rank == 0:
-                print('self.data loaded')
-
-    @staticmethod
-    def __compute_batches(resp_2d_list, dc_vec_list, map_func, req_cores,
-                          verbose=False):
-
-        if verbose:
-            print('Unit computation found {} FORC datasets with {} corresponding DC vectors'.format(len(resp_2d_list), len(dc_vec_list)))
-            print('First dataset of shape: {}'.format(resp_2d_list[0].shape))
-
-        MPI = get_MPI()
-        if MPI is not None:
-            rank = MPI.COMM_WORLD.Get_rank()
-            cores = 1
-        else:
-            rank = 0
-            cores = req_cores
-
-        if verbose:
-            print(
-                'Rank {} starting loop projections on {} cores (requested {} cores)'.format(
-                    rank, cores, req_cores))
-
-        if cores > 1:
-            values = []
-            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
-                print(loops_2d.shape, curr_vdc.shape, map_func)
-                values += [joblib.delayed(map_func)(x, [curr_vdc])
-                           for x
-                           in loops_2d]
-            results = joblib.Parallel(n_jobs=cores)(values)
-
-            # Finished reading the entire data set
-            print('Rank {} finished parallel computation'.format(rank))
-
-        else:
-            if verbose:
-                print("Rank {} computing serially ...".format(rank))
-            # List comprehension vs map vs for loop?
-            # https://stackoverflow.com/questions/1247486/python-list-comprehension-vs-map
-            results = []
-            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
-                results += [map_func(vector, curr_vdc) for vector in
-                            loops_2d]
-
-        return results
-
     def __guess_chunk(self, *args, **kwargs):
         if self.verbose and self.mpi_rank == 0:
             print("Rank {} at custom _unit_computation".format(self.mpi_rank))
@@ -644,24 +737,6 @@ class BELoopFitter(Fitter):
 
         self._results = proj_loops, loop_mets, np.array(all_guesses)
 
-    @staticmethod
-    def _project_loop(sho_response, dc_offset):
-        # projected_loop = np.zeros(shape=sho_response.shape, dtype=np.float32)
-        ancillary = np.zeros(shape=1, dtype=loop_metrics32)
-
-        pix_dict = projectLoop(np.squeeze(dc_offset),
-                               sho_response['Amplitude [V]'],
-                               sho_response['Phase [rad]'])
-
-        projected_loop = pix_dict['Projected Loop']
-        ancillary['Rotation Angle [rad]'] = pix_dict['Rotation Matrix'][0]
-        ancillary['Offset'] = pix_dict['Rotation Matrix'][1]
-        ancillary['Area'] = pix_dict['Geometric Area']
-        ancillary['Centroid x'] = pix_dict['Centroid'][0]
-        ancillary['Centroid y'] = pix_dict['Centroid'][1]
-
-        return projected_loop, ancillary
-
     def set_up_guess(self, h5_partial_guess=None):
         self.parms_dict = {'projection_method': 'pycroscopy BE loop model',
                            'guess_method': "pycroscopy Cluster Tree"}
@@ -671,26 +746,115 @@ class BELoopFitter(Fitter):
 
         self._max_pos_per_read = self._max_raw_pos_per_read // 1.5
 
-        # self._map_function = self.__project_loop
         self._unit_computation = self.__guess_chunk
         self.compute = self.do_guess
+        self._write_results_chunk = self._write_guess_chunk
 
-    def do_guess(self, override=False):
+    def set_up_fit(self, h5_partial_fit=None, h5_guess=None, ):
+        self.parms_dict = {'fit method': 'pycroscopy functional'}
+
+        # ask super to take care of the rest, which is a standardized operation
+        super(BELoopFitter, self).set_up_fit(h5_partial_fit=h5_partial_fit,
+                                             h5_guess=h5_guess)
+
+        self._max_pos_per_read = self._max_raw_pos_per_read // 1.5
+
+        self._unit_computation = self.__guess_chunk
+        self.compute = self.do_guess
+        self._write_results_chunk = self._write_guess_chunk
+
+    @staticmethod
+    def BE_LOOP(coef_vec, data_vec, dc_vec, *args):
         """
-        Compute the loop projections and the initial guess for the loop parameters.
 
         Parameters
         ----------
-        override : bool, optional
-            Whether or not to return existing results
+        coef_vec : numpy.ndarray
+        data_vec : numpy.ndarray
+        dc_vec : numpy.ndarray
+            The DC offset vector
+        args : list
 
         Returns
         -------
-        h5_guess : h5py.Dataset object
-            h5py dataset containing the guess parameters
+        fitness : float
+            The 1-r^2 value for the current set of loop coefficients
+
         """
-        # Before doing the Guess, we must first project the loops
-        return super(BELoopFitter, self).compute(override=override)
+
+        if coef_vec.size < 9:
+            raise ValueError(
+                'Error: The Loop Fit requires 9 parameter guesses!')
+
+        data_mean = np.mean(data_vec)
+
+        func = loop_fit_function(dc_vec, coef_vec)
+
+        ss_tot = sum(abs(data_vec - data_mean) ** 2)
+        ss_res = sum(abs(data_vec - func) ** 2)
+
+        r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+        return 1 - r_squared
+
+    def _unit_compute_fit(self, *args, **kwargs):
+
+        # 1 - r_squared = sho_error(guess, data_vec, freq_vector)
+
+        obj_func = self.BE_LOOP
+        solver_options = {'jac': 'cs'}
+
+        resp_2d_list, dc_vec_list = self.data
+
+        # At this point data has been read in. Read in the guess as well:
+        self._read_guess_chunk()
+
+        if self.verbose and self.mpi_rank == 0:
+            print('_unit_compute_fit got:\nobj_func: {}\n'
+                  'solver_options: {}'.format(obj_func, solver_options))
+
+        # TODO: Generalize this bit. Use Parallel compute instead!
+
+        if self.mpi_size > 1:
+            if self.verbose:
+                print('Rank {}: About to start serial computation'
+                      '.'.format(self.mpi_rank))
+
+            self._results = list()
+            for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self.guess):
+                '''
+                Shift the loops and vdc vector
+                '''
+                shift_ind, vdc_shifted = self.shift_vdc(dc_vec)
+                loops_2d_shifted = np.roll(loops_2d, shift_ind, axis=0).T
+
+                for loop_resp, loop_guess in zip(loops_2d_shifted, guess_parms):
+                    curr_results = least_squares(obj_func, loop_guess,
+                                                 args=[loop_resp, dc_vec],
+                                                 **solver_options)
+                    self._results.append(curr_results)
+        else:
+            cores = recommend_cpu_cores(len(resp_2d_list) * resp_2d_list[0].shape[0],
+                                        verbose=self.verbose)
+            if self.verbose:
+                print('Starting parallel fitting with {} cores'.format(cores))
+
+            values = list()
+            for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self.guess):
+                temp = [joblib.delayed(least_squares)(obj_func, this_guess,
+                                                    args=[this_loop, dc_vec],
+                                                    **solver_options) for
+                      this_loop, this_guess in zip(loops_2d, guess_parms)]
+                values.append(temp)
+            self._results = joblib.Parallel(n_jobs=cores)(values)
+
+        if self.verbose and self.mpi_rank == 0:
+            print(
+                'Finished computing fits on {} objects. Results of length: {}'
+                '.'.format(self.data.shape[0], len(self._results)))
+
+        # What least_squares returns is an object that needs to be extracted
+        # to get the coefficients. This is handled by the write function
 
     @staticmethod
     def _reformat_results_chunk(num_forcs, proj_loops, first_n_dim_shape,
@@ -734,7 +898,7 @@ class BELoopFitter(Fitter):
 
         return results_2d
 
-    def _write_results_chunk(self):
+    def _write_guess_chunk(self):
 
         """
         self._results is now a zipped tuple containing:
@@ -805,4 +969,3 @@ class BELoopFitter(Fitter):
         if self.verbose and self.mpi_rank == 0:
             print('Finished ?')
         """
-
