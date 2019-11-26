@@ -12,6 +12,8 @@ Created on Thu Aug 25 11:48:53 2016
 from __future__ import division, print_function, absolute_import, unicode_literals
 from enum import Enum
 import joblib
+import dask
+import time
 import numpy as np
 from sklearn.cluster import KMeans
 from scipy.optimize import least_squares
@@ -42,14 +44,6 @@ crit32 = np.dtype({'names': ['AIC_loop', 'BIC_loop', 'AIC_line', 'BIC_line'],
 field_names = ['a_0', 'a_1', 'a_2', 'a_3', 'a_4', 'b_0', 'b_1', 'b_2', 'b_3', 'R2 Criterion']
 loop_fit32 = np.dtype({'names': field_names,
                        'formats': [np.float32 for name in field_names]})
-
-
-class LoopGuessFunc(Enum):
-    cluster = 0
-
-
-class LoopFitFunc(Enum):
-    least_squares = 0
 
 
 class BELoopFitter(Fitter):
@@ -187,7 +181,7 @@ class BELoopFitter(Fitter):
             if get_attr(h5_meas_grp, 'VS_mode') != 'cKPFM':
                 raise ValueError('Provided dataset has an unsupported VS_mode: "' + get_attr(h5_meas_grp, 'VS_mode') + '"')
 
-    def __create_projection_datasets(self):
+    def _create_projection_datasets(self):
         """
         Setup the Loop_Fit Group and the loop projection datasets
 
@@ -247,7 +241,7 @@ class BELoopFitter(Fitter):
         """
         Creates the HDF5 Guess dataset
         """
-        self.__create_projection_datasets()
+        self._create_projection_datasets()
 
         self.h5_guess = create_empty_dataset(self.h5_loop_metrics, loop_fit32,
                                              'Guess')
@@ -275,7 +269,7 @@ class BELoopFitter(Fitter):
 
     def _read_data_chunk(self):
         """
-        Get the next chunk of raw data for doing the loop projections.
+        Get the next chunk of raw data
         """
 
         # The Process class should take care of all the basic reading
@@ -712,7 +706,7 @@ class BELoopFitter(Fitter):
         vdc_shifted = np.roll(vdc_vec, shift_ind)
         return shift_ind, vdc_shifted
 
-    def __guess_chunk(self, *args, **kwargs):
+    def _unit_compute_guess(self, *args, **kwargs):
         if self.verbose and self.mpi_rank == 0:
             print("Rank {} at custom _unit_computation".format(self.mpi_rank))
 
@@ -769,7 +763,7 @@ class BELoopFitter(Fitter):
 
         self._max_pos_per_read = self._max_raw_pos_per_read // 1.5
 
-        self._unit_computation = self.__guess_chunk
+        self._unit_computation = self._unit_compute_guess
         self.compute = self.do_guess
         self._write_results_chunk = self._write_guess_chunk
 
@@ -790,55 +784,78 @@ class BELoopFitter(Fitter):
         print([item for item in self.h5_results_grp])
 
     def do_fit(self, *args, override=False, **kwargs):
-        # This is REALLY ugly but needs to be done unless Projection becomes
-        # its own class, which I think it should be.
+        """
+        This is REALLY ugly but needs to be done because projection, guess,
+        and fit work in such a unique manner. At the same time, this complexity
+        needs to be invisible to the end-user
+        """
         h5_main_orig = self.h5_main
         # raw data is actually projected loops not raw SHO data
         self.h5_main = self.h5_projected_loops
-        temp = super(BELoopFitter, self).do_fit(*args, override=override, **kwargs)
+
+        # TODO: h5_main swap is not resilient against failure of do_fit
+        temp = super(BELoopFitter, self).do_fit(*args, override=override,
+                                                **kwargs)
+
+        # Reset h5_main so that this swap is invisible to the user
         self.h5_main = h5_main_orig
+
         return temp
-
-    @staticmethod
-    def BE_LOOP(coef_vec, data_vec, dc_vec, *args):
-        """
-
-        Parameters
-        ----------
-        coef_vec : numpy.ndarray
-        data_vec : numpy.ndarray
-        dc_vec : numpy.ndarray
-            The DC offset vector
-        args : list
-
-        Returns
-        -------
-        fitness : float
-            The 1-r^2 value for the current set of loop coefficients
-
-        """
-
-        if coef_vec.size < 9:
-            raise ValueError(
-                'Error: The Loop Fit requires 9 parameter guesses!')
-
-        data_mean = np.mean(data_vec)
-
-        func = loop_fit_function(dc_vec, coef_vec)
-
-        ss_tot = sum(abs(data_vec - data_mean) ** 2)
-        ss_res = sum(abs(data_vec - func) ** 2)
-
-        r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0
-
-        return 1 - r_squared
 
     def _unit_compute_fit(self, *args, **kwargs):
 
+        obj_func = BE_LOOP
+        opt_func = least_squares
+        solver_options = {'jac': 'cs'}
+
+        resp_2d_list, dc_vec_list = self.data
+
+        # At this point data has been read in. Read in the guess as well:
+        self._read_guess_chunk()
+
+        if self.mpi_size == 1:
+            print('Using Dask for parallel computation')
+            opt_func = dask.delayed(opt_func)
+        else:
+            print('Using serial computation')
+
+        t0 = time.time()
+
+        self._results = list()
+        for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list,
+                                                 self.guess):
+            '''
+            Shift the loops and vdc vector
+            '''
+            shift_ind, vdc_shifted = self.shift_vdc(dc_vec)
+            loops_2d_shifted = np.roll(loops_2d, shift_ind, axis=1)
+
+            for loop_resp, loop_guess in zip(loops_2d_shifted, guess_parms):
+                curr_results = opt_func(obj_func, loop_guess,
+                                             args=[loop_resp, vdc_shifted],
+                                             **solver_options)
+                self._results.append(curr_results)
+
+        t1 = time.time()
+
+        if self.mpi_size == 1:
+            if self.verbose:
+                print('Now computing delayed tasks:')
+
+            self._results = dask.compute(self._results, scheduler='processes')[0]
+
+            t2 = time.time()
+
+            print('Dask Setup time: {} sec. Compute time: {} sec'.format(t1- t0, t2 - t1))
+        else:
+            print('Serial compute time: {} sec'.format(t1 - t0))
+
+    def _unit_compute_fit_jl_broken(self, *args, **kwargs):
+
         # 1 - r_squared = sho_error(guess, data_vec, freq_vector)
 
-        obj_func = self.BE_LOOP
-        solver_options = {'jac': 'cs'}
+        obj_func = BE_LOOP
+        solver_options = {'jac': 'cs', 'max_nfev': 2}
 
         resp_2d_list, dc_vec_list = self.data
 
@@ -894,9 +911,15 @@ class BELoopFitter(Fitter):
                     print('Setting up delayed joblib based on DC: {}<{}>, loops: {}<{}>, Guess: {}<{}>'.format(vdc_shifted.shape, vdc_shifted.dtype, loops_2d_shifted.shape, loops_2d_shifted.dtype, guess_parms.shape, guess_parms.dtype))
 
                 temp = [joblib.delayed(least_squares)(obj_func, loop_guess, args=[loop_resp, vdc_shifted], **solver_options) for loop_resp, loop_guess in zip(loops_2d_shifted, guess_parms)]
+
+
                 values.append(temp)
             if self.verbose:
                 print('Finished setting up delayed computations. Starting parallel compute')
+                print(temp[0])
+                from pickle import dumps
+                for item in temp[0]:
+                    print(dumps(item))
             self._results = joblib.Parallel(n_jobs=cores)(values)
 
         if self.verbose and self.mpi_rank == 0:
@@ -1059,3 +1082,36 @@ class BELoopFitter(Fitter):
                     self.h5_fit.dtype))
 
         self.h5_fit[curr_pixels, :] = fits_2d
+
+
+def BE_LOOP(coef_vec, data_vec, dc_vec, *args):
+    """
+
+    Parameters
+    ----------
+    coef_vec : numpy.ndarray
+    data_vec : numpy.ndarray
+    dc_vec : numpy.ndarray
+        The DC offset vector
+    args : list
+
+    Returns
+    -------
+    fitness : float
+        The 1-r^2 value for the current set of loop coefficients
+
+    """
+    if coef_vec.size < 9:
+        raise ValueError(
+            'Error: The Loop Fit requires 9 parameter guesses!')
+
+    data_mean = np.mean(data_vec)
+
+    func = loop_fit_function(dc_vec, coef_vec)
+
+    ss_tot = sum(abs(data_vec - data_mean) ** 2)
+    ss_res = sum(abs(data_vec - func) ** 2)
+
+    r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+    return 1 - r_squared
