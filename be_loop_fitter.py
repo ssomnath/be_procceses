@@ -240,10 +240,10 @@ class BELoopFitter(Fitter):
         """
         self._create_projection_datasets()
 
-        self.h5_guess = create_empty_dataset(self.h5_loop_metrics, loop_fit32,
+        self._h5_guess = create_empty_dataset(self.h5_loop_metrics, loop_fit32,
                                              'Guess')
 
-        self.h5_guess = USIDataset(self.h5_guess)
+        self._h5_guess = USIDataset(self._h5_guess)
 
         write_simple_attrs(self.h5_results_grp, self.parms_dict)
 
@@ -254,11 +254,11 @@ class BELoopFitter(Fitter):
         Creates the HDF5 Fit dataset
         """
 
-        if self.h5_guess is None:
+        if self._h5_guess is None:
             raise ValueError('Need to guess before fitting!')
 
-        self.h5_fit = create_empty_dataset(self.h5_guess, loop_fit32, 'Fit')
-        self.h5_fit = USIDataset(self.h5_fit)
+        self._h5_fit = create_empty_dataset(self._h5_guess, loop_fit32, 'Fit')
+        self._h5_fit = USIDataset(self._h5_fit)
 
         write_simple_attrs(self.h5_results_grp, self.parms_dict)
 
@@ -426,31 +426,31 @@ class BELoopFitter(Fitter):
         super(BELoopFitter, self)._read_guess_chunk()
 
         if self.verbose and self.mpi_rank == 0:
-            print('_read_guess_chunk got guess of shape: {} from super'.format(self.guess.shape))
+            print('_read_guess_chunk got guess of shape: {} from super'.format(self._guess.shape))
 
-        spec_dim_order_s2f = get_sort_order(self.h5_guess.h5_spec_inds)[::-1]
+        spec_dim_order_s2f = get_sort_order(self._h5_guess.h5_spec_inds)[::-1]
 
         order_to_s2f = [0] + list(1 + spec_dim_order_s2f)
         if self.verbose and self.mpi_rank == 0:
             print('Order for reshaping to S2F: {}'.format(order_to_s2f))
 
         dim_labels_s2f = list(['Positions']) + list(
-            np.array(self.h5_guess.spec_dim_labels)[spec_dim_order_s2f])
+            np.array(self._h5_guess.spec_dim_labels)[spec_dim_order_s2f])
 
         if self.verbose and self.mpi_rank == 0:
             print(dim_labels_s2f, order_to_s2f)
 
-        num_forcs = int(any([targ in self.h5_guess.spec_dim_labels for targ in
+        num_forcs = int(any([targ in self._h5_guess.spec_dim_labels for targ in
                              ['FORC', 'FORC_Cycle']]))
         if num_forcs:
-            forc_pos = self.h5_guess.spec_dim_labels.index(self._forc_dim_name)
-            num_forcs = self.h5_guess.spec_dim_sizes[forc_pos]
+            forc_pos = self._h5_guess.spec_dim_labels.index(self._forc_dim_name)
+            num_forcs = self._h5_guess.spec_dim_sizes[forc_pos]
 
         if self.verbose and self.mpi_rank == 0:
             print('Num FORCS: {}'.format(num_forcs))
 
         all_but_forc_rows = []
-        for ind, dim_name in enumerate(self.h5_guess.spec_dim_labels):
+        for ind, dim_name in enumerate(self._h5_guess.spec_dim_labels):
             if dim_name not in ['FORC', 'FORC_Cycle', 'FORC_repeat']:
                 all_but_forc_rows.append(ind)
 
@@ -465,18 +465,18 @@ class BELoopFitter(Fitter):
                 print('\nWorking on FORC #{}'.format(forc_ind))
             if num_forcs:
                 this_forc_spec_inds = \
-                np.where(self.h5_guess.h5_spec_inds[forc_pos] == forc_ind)[0]
+                np.where(self._h5_guess.h5_spec_inds[forc_pos] == forc_ind)[0]
             else:
                 this_forc_spec_inds = np.ones(
-                    shape=self.h5_guess.h5_spec_inds.shape[1], dtype=np.bool)
+                    shape=self._h5_guess.h5_spec_inds.shape[1], dtype=np.bool)
 
-            this_forc_2d = self.guess[:, this_forc_spec_inds]
+            this_forc_2d = self._guess[:, this_forc_spec_inds]
             if self.verbose and self.mpi_rank == 0:
                 print('2D slice shape for this FORC: {}'.format(this_forc_2d.shape))
 
             this_forc_nd, success = reshape_to_n_dims(this_forc_2d,
                                                       h5_pos=None,
-                                                      h5_spec=self.h5_guess.h5_spec_inds[
+                                                      h5_spec=self._h5_guess.h5_spec_inds[
                                                               :,
                                                               this_forc_spec_inds])
             if self.verbose and self.mpi_rank == 0:
@@ -509,9 +509,9 @@ class BELoopFitter(Fitter):
 
             forc_mats.append(float_mat)
 
-        self.guess = np.array(forc_mats)
+        self._guess = np.array(forc_mats)
         if self.verbose and self.mpi_rank == 0:
-            print('Flattened Guesses to shape: {} and dtype:'.format(self.guess.shape, self.guess.dtype))
+            print('Flattened Guesses to shape: {} and dtype:'.format(self._guess.shape, self._guess.dtype))
 
     @staticmethod
     def _project_loop(sho_response, dc_offset):
@@ -831,7 +831,7 @@ class BELoopFitter(Fitter):
 
         self._results = list()
         for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list,
-                                                 self.guess):
+                                                 self._guess):
             '''
             Shift the loops and vdc vector
             '''
@@ -889,7 +889,7 @@ class BELoopFitter(Fitter):
                       '.'.format(self.mpi_rank))
 
             self._results = list()
-            for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self.guess):
+            for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self._guess):
                 if self.verbose:
                     print('Setting up delayed joblib based on DC: {}<{}>, loops: {}<{}>, Guess: {}<{}>'.format(dc_vec.shape, dc_vec.dtype, loops_2d.shape, loops_2d.dtype, guess_parms.shape, guess_parms.dtype))
 
@@ -914,7 +914,7 @@ class BELoopFitter(Fitter):
                 print('Starting parallel fitting with {} cores'.format(cores))
 
             values = list()
-            for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self.guess):
+            for dc_vec, loops_2d, guess_parms in zip(dc_vec_list, resp_2d_list, self._guess):
                 if self.verbose:
                     print('Setting up delayed joblib based on DC: {} loops: {}, Guess: {}'.format(dc_vec.shape, loops_2d.shape, guess_parms.shape))
                 '''
@@ -1048,12 +1048,12 @@ class BELoopFitter(Fitter):
 
             print(
                 'Writing Guesses of shape: {} and data type: {} to a dataset of shape: {} and data type {}'.format(
-                    guess_2d.shape, guess_2d.dtype, self.h5_guess.shape,
-                    self.h5_guess.dtype))
+                    guess_2d.shape, guess_2d.dtype, self._h5_guess.shape,
+                    self._h5_guess.dtype))
 
         self.h5_projected_loops[curr_pixels, :] = loops_2d
         self.h5_loop_metrics[curr_pixels, :] = mets_2d
-        self.h5_guess[curr_pixels, :] = guess_2d
+        self._h5_guess[curr_pixels, :] = guess_2d
 
     def _write_fit_chunk(self):
 
@@ -1094,10 +1094,10 @@ class BELoopFitter(Fitter):
         if self.verbose and self.mpi_rank == 0:
             print(
                 'Writing Fits of shape: {} and data type: {} to a dataset of shape: {} and data type {}'.format(
-                    fits_2d.shape, fits_2d.dtype, self.h5_fit.shape,
-                    self.h5_fit.dtype))
+                    fits_2d.shape, fits_2d.dtype, self._h5_fit.shape,
+                    self._h5_fit.dtype))
 
-        self.h5_fit[curr_pixels, :] = fits_2d
+        self._h5_fit[curr_pixels, :] = fits_2d
 
 
 def BE_LOOP(coef_vec, data_vec, dc_vec, *args):

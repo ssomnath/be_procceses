@@ -90,15 +90,15 @@ class BESHOfitter(Fitter):
         h5_sho_inds, h5_sho_vals = write_reduced_anc_dsets(self.h5_results_grp, self.h5_main.h5_spec_inds,
                                                             self.h5_main.h5_spec_vals, self._fit_dim_name)
 
-        self.h5_guess = write_main_dataset(self.h5_results_grp, (self.h5_main.shape[0], self.num_udvs_steps), 'Guess', 'SHO',
+        self._h5_guess = write_main_dataset(self.h5_results_grp, (self.h5_main.shape[0], self.num_udvs_steps), 'Guess', 'SHO',
                                            'compound', None, None, h5_pos_inds=self.h5_main.h5_pos_inds,
                                            h5_pos_vals=self.h5_main.h5_pos_vals, h5_spec_inds=h5_sho_inds,
                                            h5_spec_vals=h5_sho_vals, chunks=(1, self.num_udvs_steps), dtype=sho32,
                                            main_dset_attrs=self.parms_dict, verbose=self.verbose)
         
-        copy_region_refs(self.h5_main, self.h5_guess)
+        copy_region_refs(self.h5_main, self._h5_guess)
         
-        self.h5_guess.file.flush()
+        self._h5_guess.file.flush()
         
         if self.verbose and self.mpi_rank == 0:
             print('Finished creating Guess dataset')
@@ -111,7 +111,7 @@ class BESHOfitter(Fitter):
         The fit dataset will NOT be populated here but will instead be populated using the __setData function
         """
 
-        if self.h5_guess is None or self.h5_results_grp is None:
+        if self._h5_guess is None or self.h5_results_grp is None:
             warn('Need to guess before fitting!')
             return
 
@@ -128,9 +128,9 @@ class BESHOfitter(Fitter):
 
         # Create the fit dataset as an empty dataset of the same size and dtype as the guess.
         # Also automatically links in the ancillary datasets.
-        self.h5_fit = USIDataset(create_empty_dataset(self.h5_guess, dtype=sho32, dset_name='Fit'))
+        self._h5_fit = USIDataset(create_empty_dataset(self._h5_guess, dtype=sho32, dset_name='Fit'))
 
-        self.h5_fit.file.flush()
+        self._h5_fit.file.flush()
         
         if self.verbose and self.mpi_rank == 0:
             print('Finished creating Fit dataset')
@@ -166,10 +166,10 @@ class BESHOfitter(Fitter):
         # The Fitter class should take care of all the basic reading
         super(BESHOfitter, self)._read_guess_chunk()
         
-        self.guess = reshape_to_one_step(self.guess, self.num_udvs_steps)
-        # bear in mind that this self.guess is a compound dataset. Convert to float32
+        self._guess = reshape_to_one_step(self._guess, self.num_udvs_steps)
+        # bear in mind that this self._guess is a compound dataset. Convert to float32
         # don't keep the R^2.
-        self.guess = np.hstack([self.guess[name] for name in self.guess.dtype.names if name != 'R2 Criterion'])
+        self._guess = np.hstack([self._guess[name] for name in self._guess.dtype.names if name != 'R2 Criterion'])
                     
     def _write_results_chunk(self):
         """
@@ -181,18 +181,18 @@ class BESHOfitter(Fitter):
                                                self.parms_dict[prefix + '-algorithm'])
         
         if self._is_guess:
-            self.guess = np.hstack(tuple(self._results))
+            self._guess = np.hstack(tuple(self._results))
             # prepare to reshape:
-            self.guess = np.transpose(np.atleast_2d(self.guess))
+            self._guess = np.transpose(np.atleast_2d(self._guess))
             if self.verbose and self.mpi_rank == 0:
-                print('Prepared guess of shape {} before reshaping'.format(self.guess.shape))
-            self.guess = reshape_to_n_steps(self.guess, self.num_udvs_steps)
+                print('Prepared guess of shape {} before reshaping'.format(self._guess.shape))
+            self._guess = reshape_to_n_steps(self._guess, self.num_udvs_steps)
             if self.verbose and self.mpi_rank == 0:
-                print('Reshaped guess to shape {}'.format(self.guess.shape))
+                print('Reshaped guess to shape {}'.format(self._guess.shape))
         else:
-            self.fit = self._results
-            self.fit = np.transpose(np.atleast_2d(self.fit))
-            self.fit = reshape_to_n_steps(self.fit, self.num_udvs_steps)
+            self._fit = self._results
+            self._fit = np.transpose(np.atleast_2d(self._fit))
+            self._fit = reshape_to_n_steps(self._fit, self.num_udvs_steps)
 
         # ask super to take care of the rest, which is a standardized operation
         super(BESHOfitter, self)._write_results_chunk()

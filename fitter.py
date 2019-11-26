@@ -23,16 +23,15 @@ class Fitter(Process):
 
         self.process_name = None
                 
-        self.guess = None
-        self.fit = None
+        self._guess = None
+        self._fit = None
         
-        self.h5_guess = None
-        self.h5_fit = None
+        self._h5_guess = None
+        self._h5_fit = None
         self.h5_results_grp = None
         self.compute = self.set_up_guess
         
         self._is_guess = True
-        self.__mode = 0  # 0 for Guess pending, 1 for Fit pending, 2 for fit complete
         
     def _read_guess_chunk(self):
         """
@@ -47,10 +46,10 @@ class Fitter(Process):
 
         """
         curr_pixels = self._get_pixels_in_current_batch()
-        self.guess = self.h5_guess[curr_pixels, :]
+        self._guess = self._h5_guess[curr_pixels, :]
 
         if self.verbose and self.mpi_rank == 0:
-            print('Guess of shape: {}'.format(self.guess.shape))
+            print('Guess of shape: {}'.format(self._guess.shape))
             
     def _write_results_chunk(self):
         """
@@ -66,12 +65,12 @@ class Fitter(Process):
         statement = 'guess'
 
         if self._is_guess:
-            targ_dset = self.h5_guess
-            source_dset = self.guess
+            targ_dset = self._h5_guess
+            source_dset = self._guess
         else:
             statement = 'fit'
-            targ_dset = self.h5_fit
-            source_dset = self.fit
+            targ_dset = self._h5_fit
+            source_dset = self._fit
             
         curr_pixels = self._get_pixels_in_current_batch()
 
@@ -124,7 +123,7 @@ class Fitter(Process):
         raise NotImplementedError('Please override the _create_fit_datasets specific to your model')
         
     def _get_existing_datasets(self):
-        self.h5_guess = USIDataset(self.h5_results_grp['Guess'])
+        self._h5_guess = USIDataset(self.h5_results_grp['Guess'])
         
         try:
             self._h5_status_dset = self.h5_results_grp[self._status_dset_name]
@@ -133,10 +132,10 @@ class Fitter(Process):
             self._h5_status_dset = None
             
         try:
-            self.h5_fit = self.h5_results_grp['Fit']
-            self.h5_fit = USIDataset(self.h5_fit)
+            self._h5_fit = self.h5_results_grp['Fit']
+            self._h5_fit = USIDataset(self._h5_fit)
         except KeyError:
-            self.h5_fit = None
+            self._h5_fit = None
             if not self._is_guess:
                 self._create_fit_datasets()
         
@@ -294,7 +293,7 @@ class Fitter(Process):
                       '.'.format(self.mpi_rank))
 
             self._results = list()
-            for pulse_resp, pulse_guess in zip(self.data, self.guess):
+            for pulse_resp, pulse_guess in zip(self.data, self._guess):
                 curr_results = least_squares(obj_func, pulse_guess,
                                              args=[pulse_resp] + obj_func_args,
                                              **solver_options)
@@ -308,7 +307,7 @@ class Fitter(Process):
             values = [joblib.delayed(least_squares)(obj_func, pulse_guess,
                                                     args=[pulse_resp] + obj_func_args,
                                                     **solver_options) for
-                      pulse_resp, pulse_guess in zip(self.data, self.guess)]
+                      pulse_resp, pulse_guess in zip(self.data, self._guess)]
             self._results = joblib.Parallel(n_jobs=cores)(values)
 
         if self.verbose and self.mpi_rank == 0:
