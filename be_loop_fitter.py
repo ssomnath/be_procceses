@@ -1055,6 +1055,8 @@ class BELoopFitter(Fitter):
         self.h5_loop_metrics[curr_pixels, :] = mets_2d
         self._h5_guess[curr_pixels, :] = guess_2d
 
+        self._h5_guess.file.flush()
+
     def _write_fit_chunk(self):
 
         """
@@ -1098,6 +1100,8 @@ class BELoopFitter(Fitter):
                     self._h5_fit.dtype))
 
         self._h5_fit[curr_pixels, :] = fits_2d
+
+        self._h5_fit.file.flush()
 
 
 def BE_LOOP(coef_vec, data_vec, dc_vec, *args):
