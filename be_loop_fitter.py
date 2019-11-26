@@ -10,7 +10,6 @@ Created on Thu Aug 25 11:48:53 2016
 """
 
 from __future__ import division, print_function, absolute_import, unicode_literals
-from enum import Enum
 import joblib
 import dask
 import time
@@ -555,14 +554,14 @@ class BELoopFitter(Fitter):
         if cores > 1:
             values = []
             for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
-                print(loops_2d.shape, curr_vdc.shape, map_func)
                 values += [joblib.delayed(map_func)(x, [curr_vdc])
                            for x
                            in loops_2d]
             results = joblib.Parallel(n_jobs=cores)(values)
 
             # Finished reading the entire data set
-            print('Rank {} finished parallel computation'.format(rank))
+            if verbose:
+                print('Rank {} finished parallel computation'.format(rank))
 
         else:
             if verbose:
@@ -573,6 +572,9 @@ class BELoopFitter(Fitter):
             for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
                 results += [map_func(vector, curr_vdc) for vector in
                             loops_2d]
+
+            if verbose:
+                print('Rank {} finished serial computation'.format(rank))
 
         return results
 
@@ -785,9 +787,6 @@ class BELoopFitter(Fitter):
         self._unit_computation = self._unit_compute_fit
         self.compute = self.do_fit
         self._write_results_chunk = self._write_fit_chunk
-
-        print('Status dataset name is: ' + self._status_dset_name)
-        print([item for item in self.h5_results_grp])
 
     def do_fit(self, *args, override=False, **kwargs):
         """
