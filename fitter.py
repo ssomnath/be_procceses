@@ -7,9 +7,8 @@ from scipy.optimize import least_squares
 
 sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
 
-# Until I figure out what in the Process class is killing things....
-from usi_data import USIDataset
-from process import Process
+from pyUSID.processing.process import Process
+from pyUSID.io.usi_data import USIDataset
 
 
 class Fitter(Process):
@@ -30,6 +29,7 @@ class Fitter(Process):
         self.h5_guess = None
         self.h5_fit = None
         self.h5_results_grp = None
+        self.compute = self.set_up_guess
         
         self._is_guess = True
         self.__mode = 0  # 0 for Guess pending, 1 for Fit pending, 2 for fit complete
@@ -210,6 +210,7 @@ class Fitter(Process):
 
         self._unit_computation = super(Fitter, self)._unit_computation
         self._create_results_datasets = self._create_guess_datasets
+        self.compute = self.do_guess
 
 
     def set_up_fit(self, h5_partial_fit=None, h5_guess=None):
@@ -273,6 +274,7 @@ class Fitter(Process):
 
         # We want compute to call our own manual unit computation function:
         self._unit_computation = self._unit_compute_fit
+        self.compute = self.do_fit
 
     def _unit_compute_fit(self, obj_func, obj_func_args=[],
                           solver_options={'jac': 'cs'}):
