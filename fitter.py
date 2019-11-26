@@ -331,6 +331,22 @@ class Fitter(Process):
 
     def _unit_compute_fit(self, obj_func, obj_func_args=[],
                           solver_options={'jac': 'cs'}):
+        """
+        Performs least-squares fitting on self.data using self.guess for
+        initial conditions.
+
+        Results of the computation are captured in self._results
+
+        Parameters
+        ----------
+        obj_func : callable
+            Objective function to minimize on
+        obj_func_args : list
+            Arguments required by obj_func following the guess parameters
+            (which should be the first argument)
+        solver_options : dict, optional
+            Keyword arguments passed onto scipy.optimize.least_squares
+        """
 
         # At this point data has been read in. Read in the guess as well:
         self._read_guess_chunk()

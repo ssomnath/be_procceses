@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-:class:`~pycroscopy.analysis.be_loop_fitter.BELoopFitter` that fits Simple Harmonic Oscillator model data to a
-parametric model to describe hysteretic switching in ferroelectric materials
+:class:`~pycroscopy.analysis.be_loop_fitter.BELoopFitter` that fits Simple
+Harmonic Oscillator model data to a parametric model to describe hysteretic
+switching in ferroelectric materials
 
-Created on Thu Aug 25 11:48:53 2016
+Created on Thu Nov 20 11:48:53 2019
 
 @author: Suhas Somnath, Chris R. Smith, Rama K. Vasudevan
 
 """
 
-from __future__ import division, print_function, absolute_import, unicode_literals
+from __future__ import division, print_function, absolute_import, \
+    unicode_literals
 import joblib
 import dask
 import time
@@ -47,18 +49,17 @@ loop_fit32 = np.dtype({'names': field_names,
 
 class BELoopFitter(Fitter):
     """
-    A class that fits Simple Harmonic Oscillator model data to a 9-parameter model to describe hysteretic switching in
+    A class that fits Simple Harmonic Oscillator model data to a 9-parameter
+    model to describe hysteretic switching in
     ferroelectric materials
 
     Parameters
     ----------
-    h5_main : h5py.Dataset instance
-        The dataset over which the analysis will be performed. This dataset should be linked to the spectroscopic
-        indices and values, and position indices and values datasets.
-    variables : list(string), Default ['Frequency']
-        Lists of attributes that h5_main should possess so that it may be analyzed by Model.
-    parallel : bool, optional
-        Should the parallel implementation of the fitting be used.  Default True.
+    h5_main : h5py.Dataset
+        The dataset over which the analysis will be performed. This dataset
+        should be linked to the spectroscopic indices and values, and position
+        indices and values datasets.
+
 
     Returns
     -------
@@ -140,12 +141,13 @@ class BELoopFitter(Fitter):
     @staticmethod
     def _check_validity(h5_main):
         """
-        Checks whether or not the provided object can be analyzed by this class.
+        Checks whether or not the provided object can be analyzed by this class
 
         Parameters
         ----------
         h5_main : h5py.Dataset instance
-            The dataset containing the SHO Fit (not necessarily the dataset directly resulting from SHO fit)
+            The dataset containing the SHO Fit (not necessarily the dataset
+            directly resulting from SHO fit)
             over which the loop projection, guess, and fit will be performed.
         """
         # TODO: Need to catch KeyError s that would be thrown when attempting to access attributes
@@ -157,30 +159,36 @@ class BELoopFitter(Fitter):
         if h5_main.dtype != sho32:
             raise TypeError('Provided dataset is not a SHO results dataset.')
 
-        # This check is clunky but should account for case differences.  If Python2 support is dropped, simplify with
-        # single check using casefold.
-        if not (meas_data_type.lower != file_data_type.lower or meas_data_type.upper != file_data_type.upper):
-            message = 'Mismatch between file and Measurement group data types for the chosen dataset.\n'
-            message += 'File data type is {}.  The data type for Measurement group {} is {}'.format(file_data_type,
-                                                                                               h5_meas_grp.name,
-                                                                                               meas_data_type)
+        # This check is clunky but should account for case differences.
+        # If Python2 support is dropped, simplify with single check using case
+        if not (meas_data_type.lower != file_data_type.lower or
+                meas_data_type.upper != file_data_type.upper):
+            message = 'Mismatch between file and Measurement group data ' \
+                      'types for the chosen dataset.\n'
+            message += 'File data type is {}.  The data type for Measurement' \
+                       ' group {} is {}'.format(file_data_type,
+                                                h5_meas_grp.name,
+                                                meas_data_type)
             raise ValueError(message)
 
         if file_data_type == 'BEPSData':
-            if get_attr(h5_meas_grp, 'VS_mode') not in ['DC modulation mode', 'current mode']:
-                raise ValueError('Provided dataset has a mode: "' + get_attr(h5_meas_grp, 'VS_mode') + '" is not a '
-                                 '"DC modulation" or "current mode" BEPS dataset')
+            if get_attr(h5_meas_grp, 'VS_mode') not in ['DC modulation mode',
+                                                        'current mode']:
+                raise ValueError('Provided dataset has a mode: "' +
+                                 get_attr(h5_meas_grp, 'VS_mode') +
+                                 '" is not a "DC modulation" or "current mode"'
+                                 ' BEPS dataset')
             elif get_attr(h5_meas_grp, 'VS_cycle_fraction') != 'full':
                 raise ValueError('Provided dataset does not have full cycles')
 
         elif file_data_type == 'cKPFMData':
             if get_attr(h5_meas_grp, 'VS_mode') != 'cKPFM':
-                raise ValueError('Provided dataset has an unsupported VS_mode: "' + get_attr(h5_meas_grp, 'VS_mode') + '"')
+                raise ValueError('Provided dataset has an unsupported VS_mode:'
+                                 ' "' + get_attr(h5_meas_grp, 'VS_mode') + '"')
 
     def _create_projection_datasets(self):
         """
-        Setup the Loop_Fit Group and the loop projection datasets
-
+        Creates the Loop projection and metrics HDF5 dataset & results group
         """
 
         # Which row in the spec datasets is DC offset?
@@ -214,8 +222,8 @@ class BELoopFitter(Fitter):
             self.h5_main.h5_spec_vals, self._fit_dim_name,
             basename='Loop_Metrics', verbose=False)
 
-        self.h5_loop_metrics = write_main_dataset(self.h5_results_grp, (
-        self.h5_main.shape[0], tot_cycles), 'Loop_Metrics',
+        self.h5_loop_metrics = write_main_dataset(self.h5_results_grp,
+                                                  (self.h5_main.shape[0], tot_cycles), 'Loop_Metrics',
                                                   'Metrics', 'compound', None,
                                                   None, dtype=loop_metrics32,
                                                   h5_pos_inds=self.h5_main.h5_pos_inds,
@@ -265,7 +273,21 @@ class BELoopFitter(Fitter):
 
     def _read_data_chunk(self):
         """
-        Get the next chunk of raw data
+        Get the next chunk of SHO data (in the case of Guess) or Projected
+        loops (in the case of Fit)
+
+        Notes
+        -----
+        self.data contains data for N pixels.
+        The challenge is that this may contain M FORC cycles
+        Each FORC cycle needs its own V DC vector
+        So, we can't blindly use the inherited unit_compute.
+        Our variables now are Position, Vdc, FORC, all others
+
+        We want M lists of [VDC x all other variables]
+
+        The challenge is that VDC and FORC are inner dimensions -
+        neither the fastest nor the slowest (guaranteed)
         """
 
         # The Process class should take care of all the basic reading
@@ -279,21 +301,8 @@ class BELoopFitter(Fitter):
             print('BELoopFitter got data chunk of shape {} from Fitter'
                   '.'.format(self.data.shape))
 
-        """
-        Now self.data contains data for N pixels. 
-        The challenge is that this may contain M FORC cycles 
-        Each FORC cycle needs its own V DC vector
-        So, we can't blindly use the inherited unit_compute. 
-        Our variables now are Position, Vdc, FORC, all others
-
-        We want M lists of [VDC x all other variables]
-
-        The challenge is that VDC and FORC are inner dimensions - 
-        neither the fastest nor the slowest (guaranteed)
-        """
         spec_dim_order_s2f = get_sort_order(self.h5_main.h5_spec_inds)[::-1]
 
-        # order_to_s2f = list(pos_dim_order_s2f) + list( len(pos_dim_order_s2f) + spec_dim_order_s2f)
         self._dim_labels_s2f = list(['Positions']) + list(
             np.array(self.h5_main.spec_dim_labels)[spec_dim_order_s2f])
 
@@ -365,6 +374,10 @@ class BELoopFitter(Fitter):
                                                       h5_spec=self.h5_main.h5_spec_inds[
                                                               :,
                                                               this_forc_spec_inds])
+
+            if success != True:
+                raise ValueError('Unable to reshape data to N dimensions')
+
             if self.verbose and self.mpi_rank == 0:
                 print(this_forc_nd.shape)
 
@@ -413,19 +426,20 @@ class BELoopFitter(Fitter):
         """
         Returns a chunk of guess dataset corresponding to the main dataset.
 
-        Parameters
+        Notes
         -----
-        None
-
-        Returns
-        --------
-
+        Use the same strategy as that used for reading the raw data.
+        The technique is slightly simplified since the end result
+        per FORC cycle is just a 1D array of loop metrics.
+        However, this compound dataset needs to be converted to float
+        in order to send to scipy.optimize.least_squares
         """
         # The Fitter class should take care of all the basic reading
         super(BELoopFitter, self)._read_guess_chunk()
 
         if self.verbose and self.mpi_rank == 0:
-            print('_read_guess_chunk got guess of shape: {} from super'.format(self._guess.shape))
+            print('_read_guess_chunk got guess of shape: {} from super'
+                  '.'.format(self._guess.shape))
 
         spec_dim_order_s2f = get_sort_order(self._h5_guess.h5_spec_inds)[::-1]
 
@@ -478,6 +492,10 @@ class BELoopFitter(Fitter):
                                                       h5_spec=self._h5_guess.h5_spec_inds[
                                                               :,
                                                               this_forc_spec_inds])
+
+            if success != True:
+                raise ValueError('Unable to reshape 2D guess to N dimensions')
+
             if self.verbose and self.mpi_rank == 0:
                 print('N dimensional shape for this FORC: {}'.format(this_forc_nd.shape))
 
@@ -493,27 +511,50 @@ class BELoopFitter(Fitter):
 
             dc_rest_2d = this_forc_nd_s2f.ravel()
             if self.verbose and self.mpi_rank == 0:
-                print('Shape after raveling to 1D: {}'.format(dc_rest_2d.shape))
+                print('Shape after raveling: {}'.format(dc_rest_2d.shape))
 
             # Scipy will not understand compound values. Flatten.
             # Ignore the R2 error
-            float_mat = np.zeros(shape=list(dc_rest_2d.shape) + [len(loop_fit32.names)-1], dtype=np.float32)
+            # TODO: avoid memory copies!
+            float_mat = np.zeros(shape=list(dc_rest_2d.shape) +
+                                       [len(loop_fit32.names)-1],
+                                 dtype=np.float32)
             if self.verbose and self.mpi_rank == 0:
-                print('Created empty float matrix of shape: {}'.format(float_mat.shape))
+                print('Created empty float matrix of shape: {}'
+                      '.'.format(float_mat.shape))
             for ind, field_name in enumerate(loop_fit32.names[:-1]):
                 float_mat[..., ind] = dc_rest_2d[field_name]
 
             if self.verbose and self.mpi_rank == 0:
-                print('Shape after flattening to float: {}'.format(float_mat.shape))
+                print('Shape after flattening to float: {}'
+                      '.'.format(float_mat.shape))
 
             forc_mats.append(float_mat)
 
         self._guess = np.array(forc_mats)
         if self.verbose and self.mpi_rank == 0:
-            print('Flattened Guesses to shape: {} and dtype:'.format(self._guess.shape, self._guess.dtype))
+            print('Flattened Guesses to shape: {} and dtype:'
+                  '.'.format(self._guess.shape, self._guess.dtype))
 
     @staticmethod
     def _project_loop(sho_response, dc_offset):
+        """
+        Projects a provided piezoelectric hysteresis loop
+
+        Parameters
+        ----------
+        sho_response : numpy.ndarray
+            Compound valued array with the SHO response for a single loop
+        dc_offset : numpy.ndarray
+            DC offset corresponding to the provided loop
+
+        Returns
+        -------
+        projected_loop : numpy.ndarray
+            Projected loop
+        ancillary : numpy.ndarray
+            Metrics for the loop projection
+        """
         # projected_loop = np.zeros(shape=sho_response.shape, dtype=np.float32)
         ancillary = np.zeros(shape=1, dtype=loop_metrics32)
 
@@ -531,13 +572,35 @@ class BELoopFitter(Fitter):
         return projected_loop, ancillary
 
     @staticmethod
-    def __compute_batches(resp_2d_list, dc_vec_list, map_func, req_cores,
+    def __compute_batches(data_mat_list, ref_vec_list, map_func, req_cores,
                           verbose=False):
+        """
+        Maps the provided function onto the sets of data and their
+        corresponding reference vector. This function is almost identical and
+        is based on pyUSID.processing.comp_utils.parallel_compute. Except,
+        this function allows the data and reference vectors to be specified
+        as a list of arrays as opposed to limiting to a single reference vector
+        as in the case of parallel_compute()
 
-        if verbose:
-            print('Unit computation found {} FORC datasets with {} corresponding DC vectors'.format(len(resp_2d_list), len(dc_vec_list)))
-            print('First dataset of shape: {}'.format(resp_2d_list[0].shape))
+        Parameters
+        ----------
+        data_mat_list : list
+            List of numpy.ndarray objects
+        ref_vec_list : list
+            List of numpy.ndarray objects
+        map_func : callable
+            Function that the data matrices will be mapped to
+        req_cores : uint
+            Number of CPU cores to use for the computation
+        verbose : bool, optional. Default = False
+            Whether or not to print logs for debugging
 
+        Returns
+        -------
+        list
+            List of values returned by map_func when applied to the provided
+            data
+        """
         MPI = get_MPI()
         if MPI is not None:
             rank = MPI.COMM_WORLD.Get_rank()
@@ -548,12 +611,12 @@ class BELoopFitter(Fitter):
 
         if verbose:
             print(
-                'Rank {} starting loop projections on {} cores (requested {} cores)'.format(
-                    rank, cores, req_cores))
+                'Rank {} starting computation on {} cores (requested {} '
+                'cores)'.format(rank, cores, req_cores))
 
         if cores > 1:
             values = []
-            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
+            for loops_2d, curr_vdc in zip(data_mat_list, ref_vec_list):
                 values += [joblib.delayed(map_func)(x, [curr_vdc])
                            for x
                            in loops_2d]
@@ -569,7 +632,7 @@ class BELoopFitter(Fitter):
             # List comprehension vs map vs for loop?
             # https://stackoverflow.com/questions/1247486/python-list-comprehension-vs-map
             results = []
-            for loops_2d, curr_vdc in zip(resp_2d_list, dc_vec_list):
+            for loops_2d, curr_vdc in zip(data_mat_list, ref_vec_list):
                 results += [map_func(vector, curr_vdc) for vector in
                             loops_2d]
 
@@ -715,10 +778,23 @@ class BELoopFitter(Fitter):
         return shift_ind, vdc_shifted
 
     def _unit_compute_guess(self):
+        """
+        Performs loop projection followed by clustering-based guess for
+        the self.data loaded into memory.
+
+        In the end self._results is a tuple containing the projected loops,
+        loop metrics, and the guess parameters ready to be written to HDF5
+        """
         if self.verbose and self.mpi_rank == 0:
-            print("Rank {} at custom _unit_computation".format(self.mpi_rank))
+            print("Rank {} at _unit_compute_guess".format(self.mpi_rank))
 
         resp_2d_list, dc_vec_list = self.data
+
+        if self.verbose and self.mpi_rank == 0:
+            print('Unit computation found {} FORC datasets with {} '
+                  'corresponding DC vectors'.format(len(resp_2d_list),
+                                                    len(dc_vec_list)))
+            print('First dataset of shape: {}'.format(resp_2d_list[0].shape))
 
         results = self.__compute_batches(resp_2d_list, dc_vec_list, self._project_loop, self._cores, verbose=self.verbose)
 
@@ -763,6 +839,16 @@ class BELoopFitter(Fitter):
         self._results = proj_loops, loop_mets, np.array(all_guesses)
 
     def set_up_guess(self, h5_partial_guess=None):
+        """
+        Performs necessary book-keeping before do_guess can be called.
+        Also remaps data reading, computation, writing functions to those
+        specific to Guess
+
+        Parameters
+        ----------
+        h5_partial_guess: h5py.Dataset or pyUSID.io.USIDataset, optional
+            HDF5 dataset containing partial Guess. Not implemented
+        """
         self.parms_dict = {'projection_method': 'pycroscopy BE loop model',
                            'guess_method': "pycroscopy Cluster Tree"}
 
@@ -776,6 +862,18 @@ class BELoopFitter(Fitter):
         self._write_results_chunk = self._write_guess_chunk
 
     def set_up_fit(self, h5_partial_fit=None, h5_guess=None, ):
+        """
+        Performs necessary book-keeping before do_fit can be called.
+        Also remaps data reading, computation, writing functions to those
+        specific to Fit
+
+        Parameters
+        ----------
+        h5_partial_fit: h5py.Dataset or pyUSID.io.USIDataset, optional
+            HDF5 dataset containing partial Fit. Not implemented
+        h5_guess: h5py.Dataset or pyUSID.io.USIDataset, optional
+            HDF5 dataset containing completed Guess. Not implemented
+        """
         self.parms_dict = {'fit_method': 'pycroscopy functional'}
 
         # ask super to take care of the rest, which is a standardized operation
@@ -788,7 +886,22 @@ class BELoopFitter(Fitter):
         self.compute = self.do_fit
         self._write_results_chunk = self._write_fit_chunk
 
-    def do_fit(self, *args, override=False, **kwargs):
+    def do_fit(self, override=False,):
+        """
+        Computes the Fit
+
+        Parameters
+        ----------
+        override : bool, optional
+            If True, computes a fresh guess even if existing Fit was found
+            Else, returns existing Fit dataset. Default = False
+
+        Returns
+        -------
+        USIDataset
+            HDF5 dataset with the Fit computed
+        """
+
         """
         This is REALLY ugly but needs to be done because projection, guess,
         and fit work in such a unique manner. At the same time, this complexity
@@ -799,15 +912,19 @@ class BELoopFitter(Fitter):
         self.h5_main = self.h5_projected_loops
 
         # TODO: h5_main swap is not resilient against failure of do_fit
-        temp = super(BELoopFitter, self).do_fit(*args, override=override,
-                                                **kwargs)
+        temp = super(BELoopFitter, self).do_fit(override=override)
 
         # Reset h5_main so that this swap is invisible to the user
         self.h5_main = h5_main_orig
 
         return temp
 
-    def _unit_compute_fit(self, *args, **kwargs):
+    def _unit_compute_fit(self):
+        """
+        Performs least-squares fitting on self.data using self.guess for
+        initial conditions.
+        Results of the computation are captured in self._results
+        """
 
         obj_func = BE_LOOP
         opt_func = least_squares
@@ -865,7 +982,11 @@ class BELoopFitter(Fitter):
             if self.verbose:
                 print('Rank {}: Serial compute time: {} sec'.format(self.mpi_rank, t1 - t0))
 
-    def _unit_compute_fit_jl_broken(self, *args, **kwargs):
+    def _unit_compute_fit_jl_broken(self):
+        """
+        JobLib version of the unit computation function that unforunately
+        did not work.
+        """
 
         # 1 - r_squared = sho_error(guess, data_vec, freq_vector)
 
@@ -946,9 +1067,44 @@ class BELoopFitter(Fitter):
         # to get the coefficients. This is handled by the write function
 
     @staticmethod
-    def _reformat_results_chunk(num_forcs, proj_loops, first_n_dim_shape,
+    def _reformat_results_chunk(num_forcs, raw_results, first_n_dim_shape,
                                 first_n_dim_names, dim_labels_s2f,
                                 forc_dim_name, verbose=False):
+        """
+        Reshapes the provided flattened 2D results back to correct 2D form
+        that can be written back to the HDF5 dataset via a few reshape and
+        transpose operations
+
+        Parameters
+        ----------
+        num_forcs : uint
+            Number of FORC cycles in this data chunk / HDF5 dataset
+        raw_results : numpy.ndarray
+            Numpy array of the results (projected loops, guess, fit,
+            loop metrics, etc.
+        first_n_dim_shape : list
+            Shape of the N-dimensional raw data chunk before it was flattened
+            to the 2D or 1D (guess) shape
+        first_n_dim_names : list
+            Corresponding names of the dimensions for first_n_dim_shape
+        dim_labels_s2f : list
+            Names of the dimensions arranged from slowest to fastest
+        forc_dim_name : str
+            Name of the FORC dimension if present.
+        verbose : bool, optional. Default = False
+            Whether or not to print logs for debugging
+
+        Returns
+        -------
+        results_2d : numpy.ndarray
+            2D array that is ready to be written to the HDF5 file
+
+        Notes
+        -----
+        Step 1 will fold back the flattened 1 / 2D array into the N-dim form
+        Step 2 will reverse all transposes
+        Step 3 will flatten back to its original 2D form
+        """
 
         # What we need to do is put the forc back as the slowest dimension before the pre_flattening shape:
         if num_forcs > 1:
@@ -960,7 +1116,7 @@ class BELoopFitter(Fitter):
                   '.'.format(first_n_dim_shape, first_n_dim_names))
 
         # Now, reshape the flattened 2D results to its N-dim form before flattening (now FORC included):
-        first_n_dim_results = proj_loops.reshape(first_n_dim_shape)
+        first_n_dim_results = raw_results.reshape(first_n_dim_shape)
 
         # Need to put data back to slowest >> fastest dim
         map_to_s2f = [first_n_dim_names.index(dim_name) for dim_name in
@@ -988,19 +1144,10 @@ class BELoopFitter(Fitter):
         return results_2d
 
     def _write_guess_chunk(self):
-
         """
-        self._results is now a zipped tuple containing:
-        1. a projected loop (an array of float32) and
-        2. a single compound element for hte loop metrics
-
-        Step 1 will be to unzip the two components into separate arrays
-        Step 2 will fold back the flattened 1 / 2D array into the N-dim form
-        Step 3 will reverse all transposes
-        Step 4 will flatten back to its original 2D form
-        Step 5 will finally write the data to an HDF5 file
+        Writes the results present in self._results to appropriate HDF5
+        results datasets after appropriate manipulations
         """
-
         proj_loops, loop_mets, all_guesses = self._results
 
         if self.verbose:
@@ -1057,19 +1204,11 @@ class BELoopFitter(Fitter):
         self._h5_guess.file.flush()
 
     def _write_fit_chunk(self):
-
         """
-        self._results is now a zipped tuple containing:
-        1. a projected loop (an array of float32) and
-        2. a single compound element for hte loop metrics
-
-        Step 1 will be to unzip the two components into separate arrays
-        Step 2 will fold back the flattened 1 / 2D array into the N-dim form
-        Step 3 will reverse all transposes
-        Step 4 will flatten back to its original 2D form
-        Step 5 will finally write the data to an HDF5 file
+        Writes the results present in self._results to appropriate HDF5
+        results datasets after appropriate manipulations
         """
-        # To compound dataset: Note that this is a memory duplication!
+        # TODO: To compound dataset: Note that this is a memory duplication!
         temp = np.array(
             [np.hstack([result.x, result.fun]) for result in self._results])
         self._results = stack_real_to_compound(temp, loop_fit32)
