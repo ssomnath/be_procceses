@@ -1,49 +1,71 @@
+# -*- coding: utf-8 -*-
+"""
+:class:`~pycroscopy.analysis.fitter.Fitter` - Abstract class that provides the
+framework for building application-specific children classes
+
+Created on Thu Aug 15 11:48:53 2019
+
+@author: Suhas Somnath
+"""
+from __future__ import division, print_function, absolute_import, \
+    unicode_literals
 import numpy as np
-import sys
 from warnings import warn
 import joblib
 from pyUSID.processing.comp_utils import recommend_cpu_cores
 from scipy.optimize import least_squares
-
-sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
-
 from pyUSID.processing.process import Process
 from pyUSID.io.usi_data import USIDataset
+
+# TODO: All reading, holding operations should use Dask arrays
 
 
 class Fitter(Process):
     
     def __init__(self, h5_main, variables=None, **kwargs):
+        """
+        Creates a new instance of the abstract Fitter class
+
+        Parameters
+        ----------
+        h5_main : h5py.Dataset or pyUSID.io.USIDataset object
+            Main datasets whose one or dimensions will be reduced
+        variables : str or list, optional
+            List of spectroscopic dimension names that will be reduced
+        kwargs : dict
+            Keyword arguments that will be passed on to
+            pyUSID.processing.process.Process
+        """
+
         super(Fitter, self).__init__(h5_main, **kwargs)
         
         # Validate other arguments / kwargs here:
         if variables is not None:
             if not np.all(np.isin(variables, self.h5_main.spec_dim_labels)):
-                raise ValueError('Provided dataset does not appear to have the spectroscopic dimension(s): "{}" that need to be fitted'.format(variables))
+                raise ValueError('Provided dataset does not appear to have the'
+                                 ' spectroscopic dimension(s): "{}" that need '
+                                 'to be fitted'.format(variables))
 
-        self.process_name = None
-                
+        # Variables specific to Fitter
         self._guess = None
         self._fit = None
-        
+        self._is_guess = True
         self._h5_guess = None
         self._h5_fit = None
+        self.__set_up_called = False
+
+        # Variables from Process:
+        self.process_name = None
         self.h5_results_grp = None
         self.compute = self.set_up_guess
-        
-        self._is_guess = True
-        
+        self._unit_computation = super(Fitter, self)._unit_computation
+        self._create_results_datasets = self._create_guess_datasets
+        self._map_function = None
+
     def _read_guess_chunk(self):
         """
-        Returns a chunk of guess dataset corresponding to the main dataset.
-
-        Parameters
-        -----
-        None
-
-        Returns
-        --------
-
+        Returns a chunk of guess dataset corresponding to the same pixels of
+        the main dataset.
         """
         curr_pixels = self._get_pixels_in_current_batch()
         self._guess = self._h5_guess[curr_pixels, :]
@@ -53,76 +75,49 @@ class Fitter(Process):
             
     def _write_results_chunk(self):
         """
-        Writes the provided guess or fit results into appropriate datasets.
-        Given that the guess and fit datasets are relatively small, we should be able to hold them in memory just fine
-
-        Parameters
-        ---------
-        is_guess : bool, optional
-            Default - False
-            Flag that differentiates the guess from the fit
+        Writes the guess or fit results into appropriate HDF5 datasets.
         """
-        statement = 'guess'
-
         if self._is_guess:
             targ_dset = self._h5_guess
             source_dset = self._guess
         else:
-            statement = 'fit'
             targ_dset = self._h5_fit
             source_dset = self._fit
             
         curr_pixels = self._get_pixels_in_current_batch()
 
         if self.verbose and self.mpi_rank == 0:
-            print('Writing data of shape: {} and dtype: {} to position range: {} '
-                  'in HDF5 dataset:{}'.format(source_dset.shape,
-                                              source_dset.dtype,
+            print('Writing data of shape: {} and dtype: {} to position range: '
+                  '{} in HDF5 dataset:{}'.format(source_dset.shape,
+                                                 source_dset.dtype,
                                               [curr_pixels[0],curr_pixels[-1]],
-                                              targ_dset))
+                                                 targ_dset))
         targ_dset[curr_pixels, :] = source_dset
         
     def _create_guess_datasets(self):
         """
-        Model specific call that will write the h5 group, guess dataset, corresponding spectroscopic datasets and also
-        link the guess dataset to the spectroscopic datasets. It is recommended that the ancillary datasets be populated
-        within this function.
-
-        The guess dataset will NOT be populated here but will be populated by the __setData function
-        The fit dataset should NOT be populated here unless the user calls the optimize function.
-
-        Parameters
-        --------
-        None
-
-        Returns
-        -------
-        None
-
+        Model specific call that will create the h5 group, empty guess dataset,
+        corresponding spectroscopic datasets and also link the guess dataset
+        to the spectroscopic datasets.
         """
-        raise NotImplementedError('Please override the _create_guess_datasets specific to your model')
+        raise NotImplementedError('Please override the _create_guess_datasets '
+                                  'specific to your model')
 
     def _create_fit_datasets(self):
         """
-        Model specific call that will write the h5 group, fit dataset, corresponding spectroscopic datasets and also
-        link the fit dataset to the spectroscopic datasets. It is recommended that the ancillary datasets be populated
-        within this function.
-
-        The fit dataset will NOT be populated here but will be populated by the __setData function
-        The guess dataset should NOT be populated here unless the user calls the optimize function.
-
-        Parameters
-        --------
-        None
-
-        Returns
-        -------
-        None
-
+        Model specific call that will create the (empty) fit dataset, and
+        link the fit dataset to the spectroscopic datasets.
         """
-        raise NotImplementedError('Please override the _create_fit_datasets specific to your model')
+        raise NotImplementedError('Please override the _create_fit_datasets '
+                                  'specific to your model')
         
     def _get_existing_datasets(self):
+        """
+        Gets existing Guess, Fit, status datasets, from the HDF5 group.
+
+        All other domain-specific datasets should be loaded in the classes that
+        extend this class
+        """
         self._h5_guess = USIDataset(self.h5_results_grp['Guess'])
         
         try:
@@ -139,54 +134,77 @@ class Fitter(Process):
             if not self._is_guess:
                 self._create_fit_datasets()
         
-    def _check_for_old_guess(self):
-        """
-        Checks just the status dataset
-
-        Returns
-        -------
-
-        """
-        # return partial_dsets, completed_dsets (reverse as what Process returns below!)
-        return super(Fitter, self)._check_for_duplicates()
-    
-    def _check_for_old_fit(self):
-        """
-        Returns three lists of h5py.Dataset objects where the group contained:
-            1. Completed guess only
-            2. Partial Fit
-            3. Completed Fit
-
-        Returns
-        -------
-
-        """
-        completed_fits, partial_fits = super(Fitter, self)._check_for_duplicates()
-        # return completed_guess, partial_fits, completed_fits
-        pass
-        
     def do_guess(self, *args, override=False, **kwargs):
+        """
+        Computes the Guess
+
+        Parameters
+        ----------
+        args : list, optional
+            List of arguments
+        override : bool, optional
+            If True, computes a fresh guess even if existing Guess was found
+            Else, returns existing Guess dataset. Default = False
+        kwargs : dict, optional
+            Keyword arguments
+
+        Returns
+        -------
+        USIDataset
+            HDF5 dataset with the Guesses computed
+        """
+        if not self.__set_up_called:
+            raise ValueError('Please call set_up_guess() before calling '
+                             'do_guess()')
         self.h5_results_grp = super(Fitter, self).compute(override=override)
+        # to be on the safe side, expect setup again
+        self.__set_up_called = False
         return USIDataset(self.h5_results_grp['Guess']) 
     
     def do_fit(self, *args, override=False, **kwargs):
-        # Either delete or reset 'last_pixel' attribute to 0
-        # This value will be used for filling in the status dataset.
+        """
+        Computes the Fit
+
+        Parameters
+        ----------
+        args : list, optional
+            List of arguments
+        override : bool, optional
+            If True, computes a fresh guess even if existing Fit was found
+            Else, returns existing Fit dataset. Default = False
+        kwargs : dict, optional
+            Keyword arguments
+
+        Returns
+        -------
+        USIDataset
+            HDF5 dataset with the Fit computed
+        """
+        if not self.__set_up_called:
+            raise ValueError('Please call set_up_guess() before calling '
+                             'do_guess()')
+        """
+        Either delete or reset 'last_pixel' attribute to 0
+        This value will be used for filling in the status dataset.
+        """
         self.h5_results_grp.attrs['last_pixel'] = 0
         self.h5_results_grp = super(Fitter, self).compute(override=override)
+        # to be on the safe side, expect setup again
+        self.__set_up_called = False
         return USIDataset(self.h5_results_grp['Fit'])
     
     def _reformat_results(self, results, strategy='wavelet_peaks'):
         """
-        Model specific restructuring / reformatting of the parallel compute results
+        Model specific restructuring / reformatting of the parallel compute
+        results
 
         Parameters
         ----------
-        results : array-like
+        results : list or array-like
             Results to be formatted for writing
         strategy : str
-            The strategy used in the fit.  Determines how the results will be reformatted.
-            Default 'wavelet_peaks'
+            The strategy used in the fit.  Determines how the results will be
+            reformatted, if multiple strategies for guess / fit are available
 
         Returns
         -------
@@ -197,11 +215,25 @@ class Fitter(Process):
         return np.array(results)
 
     def set_up_guess(self, h5_partial_guess=None):
+        """
+        Performs necessary book-keeping before do_guess can be called
 
-        # Set up the parms dict so everything necessary for checking previous guess / fit is ready
+        Parameters
+        ----------
+        h5_partial_guess: h5py.Dataset or pyUSID.io.USIDataset, optional
+            HDF5 dataset containing partial Guess. Not implemented
+        """
+        # TODO: h5_partial_guess needs to be utilized
+        if h5_partial_guess is not None:
+            raise NotImplementedError('Provided h5_partial_guess cannot be '
+                                      'used yet. Ask developer to implement')
+
+        # Set up the parms dict so everything necessary for checking previous
+        # guess / fit is ready
         self._is_guess = True
         self._status_dset_name = 'completed_guess_positions'
-        self.duplicate_h5_groups, self.partial_h5_groups = self._check_for_duplicates()
+        ret_vals = self._check_for_duplicates()
+        self.duplicate_h5_groups, self.partial_h5_groups = ret_vals
 
         if self.verbose and self.mpi_rank == 0:
             print('Groups with Guess in:\nCompleted: {}\nPartial:{}'.format(
@@ -210,42 +242,62 @@ class Fitter(Process):
         self._unit_computation = super(Fitter, self)._unit_computation
         self._create_results_datasets = self._create_guess_datasets
         self.compute = self.do_guess
-
+        self.__set_up_called = True
 
     def set_up_fit(self, h5_partial_fit=None, h5_guess=None):
+        """
+        Performs necessary book-keeping before do_fit can be called
 
+        Parameters
+        ----------
+        h5_partial_fit: h5py.Dataset or pyUSID.io.USIDataset, optional
+            HDF5 dataset containing partial Fit. Not implemented
+        h5_guess: h5py.Dataset or pyUSID.io.USIDataset, optional
+            HDF5 dataset containing completed Guess. Not implemented
+        """
+        # TODO: h5_partial_guess needs to be utilized
+        if h5_partial_fit is not None or h5_guess is not None:
+            raise NotImplementedError('Provided h5_partial_fit cannot be '
+                                      'used yet. Ask developer to implement')
         self._is_guess = False
 
         self._map_function = None
         self._unit_computation = None
         self._create_results_datasets = self._create_fit_datasets
 
-        # Case 1: Fit already complete or partially complete. This is similar to a partial process. Leave as is
+        # Case 1: Fit already complete or partially complete.
+        # This is similar to a partial process. Leave as is
         self._status_dset_name = 'completed_fit_positions'
-        self.duplicate_h5_groups, self.partial_h5_groups = self._check_for_duplicates()
+        ret_vals = self._check_for_duplicates()
+        self.duplicate_h5_groups, self.partial_h5_groups = ret_vals
         if self.verbose and self.mpi_rank == 0:
             print('Checking on partial / completed fit datasets')
             print(
-                'Completed results groups:\n{}\nPartial results groups:\n{}'.format(
-                    self.duplicate_h5_groups,
-                    self.partial_h5_groups))
+                'Completed results groups:\n{}\nPartial results groups:\n'
+                '{}'.format(self.duplicate_h5_groups, self.partial_h5_groups))
 
-        # Case 2: Fit neither partial / completed. Search for guess. Most popular scenario:
+        # Case 2: Fit neither partial / completed. Search for guess.
+        # Most popular scenario:
         if len(self.duplicate_h5_groups) == 0 and len(
                 self.partial_h5_groups) == 0:
             if self.verbose and self.mpi_rank == 0:
                 print('No fit datasets found. Looking for Guess datasets')
-            # Change status dataset name back to guess to check for status on guesses:
+            # Change status dataset name back to guess to check for status
+            # on guesses:
             self._status_dset_name = 'completed_guess_positions'
-            # Note that check_for_duplicates() will be against fit's parm_dict. So make a backup of that
+            # Note that check_for_duplicates() will be against fit's parm_dict.
+            # So make a backup of that
             fit_parms = self.parms_dict.copy()
-            # Set parms_dict to an empty dict so that we can accept any Guess dataset:
+            # Set parms_dict to an empty dict so that we can accept any Guess
+            # dataset:
             self.parms_dict = dict()
-            guess_complete_h5_grps, guess_partial_h5_grps = self._check_for_duplicates()
+            ret_vals = self._check_for_duplicates()
+            guess_complete_h5_grps, guess_partial_h5_grps = ret_vals
             if self.verbose and self.mpi_rank == 0:
                 print(
-                    'Guess datasets search resulted in:\nCompleted: {}\nPartial:{}'.format(
-                        guess_complete_h5_grps, guess_partial_h5_grps))
+                    'Guess datasets search resulted in:\nCompleted: {}\n'
+                    'Partial:{}'.format(guess_complete_h5_grps,
+                                        guess_partial_h5_grps))
             # Now put back the original parms_dict:
             self.parms_dict.update(fit_parms)
 
@@ -256,7 +308,8 @@ class Fitter(Process):
                 if self.verbose and self.mpi_rank == 0:
                     print('Guess found! Using Guess in:\n{}'.format(
                         self.h5_results_grp))
-                # It will grab the older status default unless we set the status dataset back to fit
+                # It will grab the older status default unless we set the
+                # status dataset back to fit
                 self._status_dset_name = 'completed_fit_positions'
                 # Get handles to the guess dataset. Nothing else will be found
                 self._get_existing_datasets()
@@ -274,6 +327,7 @@ class Fitter(Process):
         # We want compute to call our own manual unit computation function:
         self._unit_computation = self._unit_compute_fit
         self.compute = self.do_fit
+        self.__set_up_called = True
 
     def _unit_compute_fit(self, obj_func, obj_func_args=[],
                           solver_options={'jac': 'cs'}):
@@ -283,7 +337,8 @@ class Fitter(Process):
 
         if self.verbose and self.mpi_rank == 0:
             print('_unit_compute_fit got:\nobj_func: {}\nobj_func_args: {}\n'
-                  'solver_options: {}'.format(obj_func, obj_func_args, solver_options))
+                  'solver_options: {}'.format(obj_func, obj_func_args,
+                                              solver_options))
 
         # TODO: Generalize this bit. Use Parallel compute instead!
 
