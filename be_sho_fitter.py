@@ -1,27 +1,34 @@
-import sys
+# -*- coding: utf-8 -*-
+"""
+:class:`~pycroscopy.analysis.be_loop_fitter.BESHOfitter` that fits band
+excitation cantilever vibration response to a Simple Harmonic Oscillator model
+
+Created on Thu Nov 20 11:48:53 2019
+
+@author: Suhas Somnath, Chris R. Smith
+"""
+from __future__ import division, print_function, absolute_import, \
+    unicode_literals
 from enum import Enum
 from warnings import warn
 import numpy as np
-import joblib
 from functools import partial
-from scipy.optimize import least_squares
-
-sys.path.append(r'C:\Users\Suhas\PycharmProjects\pyUSID')
-from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, create_results_group, write_reduced_anc_dsets, \
-                                create_empty_dataset, write_main_dataset
-from pyUSID.processing.comp_utils import recommend_cpu_cores
+from pyUSID.io.hdf_utils import copy_region_refs, write_simple_attrs, \
+    create_results_group, write_reduced_anc_dsets, create_empty_dataset, \
+    write_main_dataset
+from pyUSID.io.usi_data import USIDataset
 
 # From this project:
 from utils import sho_error, reshape_to_one_step, reshape_to_n_steps, \
     is_reshapable, complex_gaussian, wavelet_peaks
-from usi_data import USIDataset
 from fitter import Fitter
 
 
 '''
 Custom dtype for the datasets created during fitting.
 '''
-field_names = ['Amplitude [V]', 'Frequency [Hz]', 'Quality Factor', 'Phase [rad]', 'R2 Criterion']
+field_names = ['Amplitude [V]', 'Frequency [Hz]', 'Quality Factor',
+               'Phase [rad]', 'R2 Criterion']
 sho32 = np.dtype({'names': field_names,
                   'formats': [np.float32 for name in field_names]})
 
@@ -38,14 +45,27 @@ class SHOFitFunc(Enum):
 class BESHOfitter(Fitter):
     
     def __init__(self, h5_main, **kwargs):
-        super(BESHOfitter, self).__init__(h5_main, variables=['Frequency'], **kwargs)
+        """
+        Creates an instance of the BESHOFitter class
+
+        Parameters
+        ----------
+        h5_main : pyUSID.io.USIDataset
+            Main dataset containing band excitation measurement
+        kwargs : dict, optional
+            Keyword arguments such as "verbose" and "cores" that will be
+            passed onto :class:`~pyUSID.processing.process.Process`
+        """
+        super(BESHOfitter, self).__init__(h5_main, variables=['Frequency'],
+                                          **kwargs)
 
         self.process_name = "SHO_Fit"
         self.parms_dict = None
         
         self._fit_dim_name = 'Frequency'      
 
-        # Extract some basic parameters that are necessary for either the guess or fit
+        # Extract some basic parameters that are necessary for either the guess
+        # or fit
         freq_dim_ind = self.h5_main.spec_dim_labels.index('Frequency')
         self.step_start_inds = np.where(self.h5_main.h5_spec_inds[freq_dim_ind] == 0)[0]
         self.num_udvs_steps = len(self.step_start_inds)
@@ -126,9 +146,12 @@ class BESHOfitter(Fitter):
 
         write_simple_attrs(self.h5_results_grp, self.parms_dict)
 
-        # Create the fit dataset as an empty dataset of the same size and dtype as the guess.
+        # Create the fit dataset as an empty dataset of the same size and dtype
+        # as the guess.
         # Also automatically links in the ancillary datasets.
-        self._h5_fit = USIDataset(create_empty_dataset(self._h5_guess, dtype=sho32, dset_name='Fit'))
+        self._h5_fit = USIDataset(create_empty_dataset(self._h5_guess,
+                                                       dtype=sho32,
+                                                       dset_name='Fit'))
 
         self._h5_fit.file.flush()
         
@@ -143,10 +166,12 @@ class BESHOfitter(Fitter):
         # The Fitter class should take care of all the basic reading
         super(BESHOfitter, self)._read_data_chunk()
 
-        # At this point the self.data object is the raw data that needs to be reshaped to a single UDVS step:
+        # At this point the self.data object is the raw data that needs to be
+        # reshaped to a single UDVS step:
         if self.data is not None:
             if self.verbose and self.mpi_rank == 0:
-                print('Got raw data of shape {} from super'.format(self.data.shape))
+                print('Got raw data of shape {} from super'
+                      '.'.format(self.data.shape))
             self.data = reshape_to_one_step(self.data, self.num_udvs_steps)
             if self.verbose and self.mpi_rank == 0:
                 print('Reshaped raw data to shape {}'.format(self.data.shape))
@@ -268,8 +293,11 @@ class BESHOfitter(Fitter):
         super(BESHOfitter, self).set_up_fit(h5_partial_fit=h5_partial_fit,
                                             h5_guess=h5_guess)
            
-    def _unit_compute_fit(self, *args, **kwargs):
+    def _unit_compute_fit(self):
+        """
+        Punts unit computation on a chunk of data to Process
 
+        """
         super(BESHOfitter, self)._unit_compute_fit(sho_error,
                                                    obj_func_args=[self.freq_vec],
                                                    solver_options={'jac': 'cs'})
@@ -351,4 +379,3 @@ class BESHOfitter(Fitter):
                   print('_reformat_results() will not reformat results since the provided algorithm: {} does not match anything that this function can handle.'.format(strategy))
 
         return sho_vec
-    
