@@ -9,12 +9,11 @@
 4. These classes will eventually replace their original counterparts in pycroscopy soon (late 2019 / early 2020) *upon verification / validation by CNMS staff*.
 
 ### Usage:
-
 ```python
 import h5py
 import pyUSID as usid
 
-# This the Fitters are not part of pycroscopy (yet), import them manually 
+# Since the Fitters are not part of pycroscopy (yet), import them manually 
 from be_sho_fitter import BESHOfitter
 from be_loop_fitter import BELoopFitter
 
@@ -30,11 +29,12 @@ sho_proc = BESHOfitter(h5_main, verbose=False)
 sho_proc.set_up_guess()
 h5_sho_guess = sho_proc.do_guess()
 
+# Set up fit before fitting
 sho_proc.set_up_fit()
 h5_sho_fit = sho_proc.do_fit()
 
 # Repeat the same procedure for Loop fitting:
-loop_proc = BELoopFitter(h5_sho_fit)
+loop_proc = BELoopFitter(h5_sho_fit, verbose=False)
 
 loop_proc.set_up_guess()
 h5_loop_guess = loop_proc.do_guess()
