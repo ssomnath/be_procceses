@@ -72,17 +72,16 @@ class BELoopFitter(Fitter):
 
     """
 
-    def __init__(self, h5_main, variables=None, **kwargs):
-        if variables is None:
-            variables = ['DC_Offset']
+    def __init__(self, h5_main, **kwargs):
 
-        super(BELoopFitter, self).__init__(h5_main, variables=variables, **kwargs)
+        super(BELoopFitter, self).__init__(h5_main, variables=None, **kwargs)
 
         self.process_name = "Loop_Fit"
         self.parms_dict = None
 
         self._check_validity(h5_main)
 
+        # Instead of the variables kwarg to the Fitter. Do check here:
         if 'DC_Offset' in self.h5_main.spec_dim_labels:
             self._fit_dim_name = 'DC_Offset'
         elif 'write_bias' in self.h5_main.spec_dim_labels:
